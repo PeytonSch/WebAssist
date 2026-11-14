@@ -1,0 +1,7 @@
+node_modules/
+dist/
+sessions/
+examples/.demo-logs/
+examples/sessions/
+debug-hub.config.json
+*.log

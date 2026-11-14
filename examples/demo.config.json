@@ -1,0 +1,15 @@
+{
+  "port": 4000,
+  "sessionsDir": "sessions",
+  "chrome": { "port": 9222 },
+  "tomcat": {
+    "enabled": true,
+    "appLogs": [".demo-logs/catalina*"],
+    "accessLogs": [".demo-logs/localhost_access_log*.txt"],
+    "accessDurationUnit": "ms"
+  },
+  "postgres": {
+    "enabled": true,
+    "logs": [".demo-logs/postgresql*.log"]
+  }
+}

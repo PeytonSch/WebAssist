@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Debug Hub</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='6' fill='%234f46e5'/%3E%3Cpath d='M6 8h12M6 12h8M6 16h10' stroke='white' stroke-width='2' stroke-linecap='round'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
+        <rect width="24" height="24" rx="6" fill="var(--accent)"/>
+        <path d="M6 8h12M6 12h8M6 16h10" stroke="#fff" stroke-width="2" stroke-linecap="round"/>
+      </svg>
+      <span>Debug Hub</span>
+    </div>
+
+    <div class="session">
+      <span id="mode" class="mode mode-live">Live</span>
+      <select id="session" aria-label="Session"></select>
+    </div>
+
+    <div id="collectors" class="collectors" aria-label="Collector status"></div>
+
+    <div class="spacer"></div>
+
+    <button id="btn-marker" class="btn" title="Add a named marker to the timeline (M)">
+      <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M3.5 14V2.5h8l-1.8 3 1.8 3h-8" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/></svg>
+      Marker
+    </button>
+    <button id="btn-follow" class="btn" title="Keep the newest events in view (F)">
+      <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M8 2.5v9m0 0L4.5 8M8 11.5 11.5 8M3 13.5h10" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      Follow
+    </button>
+    <button id="btn-new" class="btn" title="Close this session file and start a new one">New session</button>
+    <button id="btn-theme" class="btn btn-icon" title="Toggle light / dark theme" aria-label="Toggle theme">
+      <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"><path d="M13.5 9.5A6 6 0 0 1 6.5 2.5a5.5 5.5 0 1 0 7 7Z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg>
+    </button>
+    <button id="btn-help" class="btn btn-icon" title="Keyboard shortcuts (?)" aria-label="Keyboard shortcuts">?</button>
+  </header>
+
+  <div class="filterbar">
+    <div class="search">
+      <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><circle cx="7" cy="7" r="4.5" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="m10.5 10.5 3 3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+      <input id="q" type="search" placeholder="Search events" title="Searches URLs, messages, bodies and request IDs. Space-separated terms must all match." autocomplete="off" spellcheck="false">
+      <kbd>/</kbd>
+    </div>
+    <div id="f-source" class="chips" role="group" aria-label="Source"></div>
+    <span class="divider"></span>
+    <div id="f-level" class="chips" role="group" aria-label="Level"></div>
+    <span class="divider"></span>
+    <div id="f-group" class="chips" role="group" aria-label="Kind"></div>
+    <span class="divider"></span>
+    <label class="check" title="Hide scripts, styles, images and fonts unless they failed">
+      <input id="f-static" type="checkbox"> Hide assets
+    </label>
+    <div class="spacer"></div>
+    <select id="presets" class="select-quiet" aria-label="Filter presets" title="Filter presets"></select>
+    <span id="count" class="count"></span>
+  </div>
+
+  <main id="main">
+    <section class="timeline">
+      <div class="thead">
+        <span class="c-time">Time</span>
+        <span class="c-src">Source</span>
+        <span class="c-main">Event</span>
+        <span class="c-status">Status</span>
+        <span class="c-dur">Duration</span>
+      </div>
+      <div id="viewport" class="viewport" tabindex="0">
+        <div id="spacer" class="vspacer"><div id="rows" class="rows"></div></div>
+        <div id="empty" class="empty" hidden></div>
+      </div>
+    </section>
+    <aside id="detail" class="detail" hidden></aside>
+  </main>
+
+  <dialog id="prompt" class="dialog">
+    <form method="dialog" id="prompt-form">
+      <h2 id="prompt-title"></h2>
+      <input id="prompt-input" type="text" autocomplete="off" maxlength="200">
+      <div class="dialog-actions">
+        <button type="button" class="btn" id="prompt-cancel">Cancel</button>
+        <button type="submit" class="btn btn-primary" id="prompt-ok">Add</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="help" class="dialog">
+    <h2>Keyboard shortcuts</h2>
+    <dl class="keys">
+      <dt><kbd>/</kbd></dt><dd>Search</dd>
+      <dt><kbd>M</kbd></dt><dd>Add a marker</dd>
+      <dt><kbd>J</kbd> <kbd>K</kbd> or <kbd>↓</kbd> <kbd>↑</kbd></dt><dd>Next / previous event</dd>
+      <dt><kbd>E</kbd></dt><dd>Errors and warnings only</dd>
+      <dt><kbd>F</kbd></dt><dd>Follow newest events</dd>
+      <dt><kbd>R</kbd></dt><dd>Reset filters</dd>
+      <dt><kbd>Esc</kbd></dt><dd>Close the detail panel</dd>
+      <dt>Shift-click a filter</dt><dd>Show only that one</dd>
+    </dl>
+    <div class="dialog-actions">
+      <button class="btn btn-primary" id="help-close">Close</button>
+    </div>
+  </dialog>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>

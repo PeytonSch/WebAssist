@@ -1,0 +1,26 @@
+{
+  "port": 4000,
+  "sessionsDir": "sessions",
+  "chrome": {
+    "enabled": true,
+    "port": 9222,
+    "captureBodies": true,
+    "bodyResourceTypes": ["XHR", "Fetch", "Document"]
+  },
+  "tomcat": {
+    "enabled": true,
+    "appLogs": [
+      "/path/to/CATALINA_BASE/logs/catalina*",
+      "/path/to/CATALINA_BASE/logs/localhost.*.log"
+    ],
+    "accessLogs": ["/path/to/CATALINA_BASE/logs/localhost_access_log.*.txt"],
+    "accessDurationUnit": "ms"
+  },
+  "postgres": {
+    "enabled": false,
+    "logs": ["/path/to/postgres/data/log/postgresql-*.log"]
+  },
+  "redact": { "headers": ["authorization", "proxy-authorization", "cookie", "set-cookie"] },
+  "maxBodyBytes": 65536,
+  "correlation": { "header": "X-Request-Id", "timeWindowMs": 2000 }
+}
