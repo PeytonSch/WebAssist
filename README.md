@@ -27,7 +27,10 @@ Debug Hub also runs as a desktop app that updates itself: open it, a splash scre
 GitHub for a newer release, installs it, and the window opens on the new version. For the
 first install on a computer, download the Windows installer (or the macOS `.dmg`) from the
 releases page. Everything is set up in **Settings** (File → Settings…, or `Ctrl+,`), which opens
-by itself on the first run; the sessions folder is under the File menu too. Releasing is `git tag vX.Y.Z && git push origin vX.Y.Z`; details in
+by itself on the first run; the sessions folder is under the File menu too. On Windows the app
+draws its own title bar in the app's theme: the ☰ button at the top left opens the menu
+(File, Edit, View, Window), and the top bar drags the window (double-click to maximize). On
+macOS the usual window buttons stay at the top left. Releasing is `git tag vX.Y.Z && git push origin vX.Y.Z`; details in
 `docs/updates.md`.
 
 ## Quick start (from source)

@@ -2,6 +2,7 @@ import { correlate, type CorrItem, type Correlation } from '../shared/correlate'
 import type { HubEvent, HubStatus, Level, ServerMessage, SessionInfo } from '../shared/types';
 import { $, fmtBytes, h, type Child } from './dom';
 import { initSettings, openSettings, settingsOpen, updateSettingsStatus } from './settings';
+import { initTitlebar } from './titlebar';
 
 // Everything captured is untrusted text. It is only ever placed in the DOM through
 // textContent (see `h`), never as HTML.
@@ -887,6 +888,7 @@ function applyTheme(theme: string): void {
 }
 
 function init(): void {
+  initTitlebar();
   applyTheme(load<string | null>('dh.theme', null) ?? (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'));
   $<HTMLInputElement>('q').value = state.filters.q;
   $<HTMLInputElement>('f-static').checked = state.filters.hideStatic;

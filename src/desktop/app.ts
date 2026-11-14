@@ -35,6 +35,11 @@ export async function run(ctx: ShellContext): Promise<void> {
     show: false,
     title: 'Debug Hub',
     backgroundColor: nativeTheme.shouldUseDarkColors ? '#0b0d12' : '#f6f7f9',
+    // The UI's top bar is the title bar (src/ui/titlebar.ts). On macOS the native traffic lights
+    // stay, inset into it; elsewhere the UI draws its own window buttons and menu button.
+    ...(process.platform === 'darwin'
+      ? { titleBarStyle: 'hiddenInset' as const, trafficLightPosition: { x: 18, y: 19 } }
+      : { frame: false }),
     webPreferences: { preload: join(ctx.payloadDir, 'preload.cjs'), contextIsolation: true, sandbox: true },
   });
   // The UI is a plain web page; anything that tries to leave it opens in the real browser.
@@ -76,6 +81,27 @@ export async function run(ctx: ShellContext): Promise<void> {
   ipcMain.handle('dh:restart', (e) => {
     if (fromUi(e)) ctx.relaunch();
   });
+  ipcMain.handle('dh:window', (e, action: unknown) => {
+    if (!fromUi(e)) return;
+    if (action === 'minimize') win.minimize();
+    else if (action === 'toggle-maximize') {
+      if (win.isMaximized()) win.unmaximize();
+      else win.maximize();
+    } else if (action === 'close') win.close();
+  });
+  ipcMain.handle('dh:is-maximized', (e) => fromUi(e) && win.isMaximized());
+  // Without a native frame on Windows and Linux, the menu bar is gone; the UI's menu button pops
+  // the same menu up under itself. x and y are CSS pixels in the page.
+  ipcMain.handle('dh:popup-menu', (e, at: { x?: unknown; y?: unknown }) => {
+    if (!fromUi(e)) return;
+    const zoom = win.webContents.getZoomFactor();
+    const px = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? Math.round(v * zoom) : undefined);
+    Menu.getApplicationMenu()?.popup({ window: win, x: px(at?.x), y: px(at?.y) });
+  });
+  // Includes Windows snap (dragging to the top edge) and the OS double-click on the top bar.
+  const sendMaximized = () => win.webContents.send('dh:maximized', win.isMaximized());
+  win.on('maximize', sendMaximized);
+  win.on('unmaximize', sendMaximized);
   const openSettings = () => win.webContents.send('dh:open-settings');
 
   const template: MenuItemConstructorOptions[] = [

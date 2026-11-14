@@ -226,6 +226,55 @@ select:focus-visible, .btn:focus-visible, .chip:focus-visible, input:focus-visib
 :root[data-theme="dark"] .btn-primary { color: #0b0d12; }
 .btn-ghost { border-color: transparent; box-shadow: none; background: none; color: var(--text-2); }
 
+/* ── Window frame (desktop app only) ─────────────────── */
+/* src/ui/titlebar.ts sets data-frame on <html> when the top bar stands in for the native title
+   bar. Without it (a normal browser tab) none of this applies. */
+
+:root {
+  --titlebtn-hover: rgba(16, 24, 40, 0.07);
+  --titlebtn-active: rgba(16, 24, 40, 0.12);
+}
+:root[data-theme="dark"] {
+  --titlebtn-hover: rgba(255, 255, 255, 0.08);
+  --titlebtn-active: rgba(255, 255, 255, 0.13);
+}
+
+:root[data-frame] .topbar {
+  -webkit-app-region: drag;
+  user-select: none;
+}
+:root[data-frame] .topbar :is(button, select, input, textarea, a, label, .collector, .mode) {
+  -webkit-app-region: no-drag;
+}
+:root[data-frame="mac"] .topbar { padding-left: 88px; }
+:root[data-frame="custom"] .topbar { padding-left: 8px; padding-right: 0; }
+
+.titlebar-menu { flex: none; margin-right: -2px; }
+
+.window-controls {
+  display: flex;
+  align-self: stretch;
+  margin-left: 6px;
+  flex: none;
+}
+.window-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 46px;
+  height: 100%;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-2);
+  cursor: default;
+}
+.window-btn svg { shape-rendering: crispEdges; }
+.window-btn:hover { background: var(--titlebtn-hover); color: var(--text); }
+.window-btn:active { background: var(--titlebtn-active); }
+.window-close:hover, .window-close:active { background: #c42b1c; color: #fff; }
+.window-close:active { background: #b0281a; }
+
 /* ── Filter bar ──────────────────────────────────────── */
 
 .filterbar {
