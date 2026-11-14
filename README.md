@@ -24,8 +24,9 @@ Deviations from the plan are listed in `docs/decisions.md`.
 ## Desktop app
 
 Debug Hub also runs as a desktop app that updates itself: open it, a splash screen checks
-GitHub for a newer release, installs it, and the window opens on the new version. Download the
-`.dmg` from the releases page for the first install on a computer. Config and sessions are
+GitHub for a newer release, installs it, and the window opens on the new version. For the
+first install on a computer, download the Windows installer (or the macOS `.dmg`) from the
+releases page. Config and sessions are
 under the app's File menu. Releasing is `git tag vX.Y.Z && git push origin vX.Y.Z`; details in
 `docs/updates.md`.
 
@@ -57,7 +58,8 @@ Open http://localhost:4000 in any browser and click the buttons in the demo app.
 ## Configuration
 
 `debug-hub.config.json` in the directory you start the hub from (or `--config <file>`).
-Relative paths are relative to the config file. Everything is optional.
+Relative paths are relative to the config file. Everything is optional. Windows paths can be
+written with forward slashes or pasted as they are (`C:\Users\me\logs`).
 
 | Key | Default | Meaning |
 |---|---|---|
@@ -135,7 +137,7 @@ npm run app           # the desktop app, from source
 | Symptom | Cause and fix |
 |---|---|
 | Chrome stays "waiting" | Nothing is listening on `chrome.port`. Check `curl http://localhost:9222/json`. IntelliJ may start Chrome with `--remote-debugging-pipe` or a random port; `npm run doctor` says which, and how to add `--remote-debugging-port=9222`. |
-| Tomcat shows "No files match" | The paths are wrong, or Tomcat has not written a log yet. IntelliJ's `CATALINA_BASE` is not the Tomcat install directory; `doctor` prints the real one. |
+| Tomcat shows "No files match" | The paths are wrong, or Tomcat has not written a log yet. IntelliJ's `CATALINA_BASE` is not the Tomcat install directory; `doctor` prints the real one (on Windows, usually under `%LOCALAPPDATA%\JetBrains\<IDE version>\tomcat\`). |
 | No application log lines | IntelliJ shows Tomcat's stdout in its console and usually does not write `catalina.out`. Log to a file. |
 | Access log durations are 1000 times too large | Tomcat 10 or later: set `tomcat.accessDurationUnit` to `"us"`. |
 | Postgres events are hours off | `log_timezone` differs from the machine's zone. Set it to the local zone or `UTC`. |

@@ -179,3 +179,25 @@ describe('correlate', () => {
     expect(pathsMatch('/api/orders', '/')).toBe(false);
   });
 });
+
+describe('config', async () => {
+  const { forgiveBackslashes, loadConfig, DEFAULT_CONFIG } = await import('../src/server/config');
+  it('accepts Windows paths pasted with single backslashes', () => {
+    const pasted = '{ "tomcat": { "appLogs": ["C:\\Users\\me\\tomcat\\logs\\catalina*"] } }';
+    expect(JSON.parse(forgiveBackslashes(pasted)).tomcat.appLogs).toEqual(['C:/Users/me/tomcat/logs/catalina*']);
+  });
+  it('leaves properly escaped backslashes and quotes alone', () => {
+    const proper = JSON.stringify({ a: 'C:\\Users\\me', b: 'say "hi"', c: DEFAULT_CONFIG.correlation.logPatterns[0] });
+    expect(JSON.parse(forgiveBackslashes(proper))).toEqual(JSON.parse(proper));
+  });
+  it('loads a config file and resolves relative paths against it', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'dh-cfg-'));
+    writeFileSync(join(dir, 'c.json'), '{ "port": 4321, "tomcat": { "enabled": true, "appLogs": ["logs/catalina*"] } }');
+    const { config } = loadConfig(join(dir, 'c.json'));
+    expect(config.port).toBe(4321);
+    expect(config.chrome.port).toBe(9222);
+    expect(config.tomcat.appLogs).toEqual([join(dir, 'logs', 'catalina*')]);
+    expect(config.sessionsDir).toBe(join(dir, 'sessions'));
+    rmSync(dir, { recursive: true, force: true });
+  });
+});

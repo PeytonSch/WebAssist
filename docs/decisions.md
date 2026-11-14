@@ -15,4 +15,5 @@
 | 11 | Session files kept or deleted (open question). | Kept. | Replay needs them. Delete files from `sessions/` to remove them. |
 | 12 | A local process with a web UI on `localhost:4000`. | Also ships as a desktop app (Electron) that updates itself from GitHub Releases. `npm start` still works. | Requested by the owner after the first build. See `updates.md`. |
 | 13 | n/a | The updater replaces a small payload in the user-data folder instead of the installed app, unlike GooseFluence's updater, which swaps the whole `.app`. | Updating has to finish before the window opens, so it must be fast; and leaving the bundle untouched keeps the ad-hoc signature valid. The cost: changes to the shell itself need a reinstall. |
-| 14 | n/a | macOS only in CI. | Matches the owner's GooseFluence setup. The updater and shell also ran on Linux during testing; Windows is untested. |
+| 14 | n/a | Windows (primary) and macOS installers are built in CI. Neither is code-signed. | The owner runs the app mainly on Windows. The updater and shell were tested on Linux only; the Windows and macOS builds first run in GitHub Actions. |
+| 15 | Config is JSON. | Single backslashes in the config are read as forward slashes. | Windows paths pasted into JSON would otherwise fail to parse, or silently turn `\t` into a tab. |

@@ -77,6 +77,16 @@ function merge<T>(base: T, over: any): T {
   return out;
 }
 
+/**
+ * Windows paths pasted into JSON ("C:\Users\me\logs" with single backslashes) are invalid or,
+ * worse, silently wrong: \t and \b are legal escapes. Every backslash that is not part of \\ or
+ * \" becomes a forward slash, which Windows accepts in paths. Regexes in the config must
+ * therefore escape their backslashes properly (\\b), as JSON requires anyway.
+ */
+export function forgiveBackslashes(json: string): string {
+  return json.replace(/\\(\\|")|\\/g, (m, keep) => (keep ? m : '/'));
+}
+
 export interface LoadedConfig {
   config: Config;
   /** Path of the config file that was read, or null when running on defaults. */
@@ -91,7 +101,7 @@ export function loadConfig(explicitPath?: string, cwd = process.cwd()): LoadedCo
   }
   let raw: unknown;
   try {
-    raw = JSON.parse(readFileSync(file, 'utf8'));
+    raw = JSON.parse(forgiveBackslashes(readFileSync(file, 'utf8')));
   } catch (err) {
     throw new Error(`Could not parse ${file}: ${(err as Error).message}`);
   }

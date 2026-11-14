@@ -69,6 +69,23 @@ interface State {
 }
 
 const MAX_PAYLOAD_BYTES = 200 * 1024 * 1024;
+
+/**
+ * On Windows, antivirus and the search indexer briefly hold freshly written files open, which
+ * makes rename and delete fail with EPERM/EBUSY/EACCES. The lock clears within moments, so retry.
+ */
+function retrying<T>(fn: () => T, attempts = 20, waitMs = 100): T {
+  for (let i = 1; ; i++) {
+    try {
+      return fn();
+    } catch (err: any) {
+      const transient = err?.code === 'EPERM' || err?.code === 'EBUSY' || err?.code === 'EACCES' || err?.code === 'ENOTEMPTY';
+      if (!transient || i >= attempts) throw err;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, waitMs);
+    }
+  }
+}
+const removeDir = (dir: string) => rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
 const VERSION = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
 
 /** "v1.2.3" / "1.2.3" -> [1, 2, 3]; anything after a "-" is ignored. */
@@ -138,7 +155,7 @@ export class Updater {
   private writeState(s: State): void {
     const tmp = `${this.stateFile}.tmp`;
     writeFileSync(tmp, JSON.stringify(s, null, 2));
-    renameSync(tmp, this.stateFile);
+    retrying(() => renameSync(tmp, this.stateFile));
   }
 
   private downloaded(version: string | null, bad: string[]): PayloadInfo | null {
@@ -226,14 +243,14 @@ export class Updater {
       this.o.onProgress?.({ phase: 'installing', version });
       const finalDir = join(this.o.root, version);
       const tmpDir = `${finalDir}.tmp-${process.pid}`;
-      rmSync(tmpDir, { recursive: true, force: true });
+      removeDir(tmpDir);
       try {
         unpackPayload(data, tmpDir);
         if (!existsSync(join(tmpDir, 'app.cjs'))) throw new Error('The update is missing its entry point');
-        rmSync(finalDir, { recursive: true, force: true });
-        renameSync(tmpDir, finalDir);
+        removeDir(finalDir);
+        retrying(() => renameSync(tmpDir, finalDir));
       } finally {
-        rmSync(tmpDir, { recursive: true, force: true });
+        removeDir(tmpDir);
       }
 
       const s = this.readState();
@@ -277,7 +294,11 @@ export class Updater {
     const s = this.readState();
     for (const name of readdirSync(this.o.root, { withFileTypes: true })) {
       if (!name.isDirectory() || name.name === s.current || name.name === s.previous) continue;
-      rmSync(join(this.o.root, name.name), { recursive: true, force: true });
+      try {
+        removeDir(join(this.o.root, name.name));
+      } catch {
+        /* still locked; the next update prunes it */
+      }
     }
   }
 }

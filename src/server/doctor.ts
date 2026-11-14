@@ -22,7 +22,8 @@ function listProcesses(): Proc[] {
         [
           '-NoProfile',
           '-Command',
-          "Get-CimInstance Win32_Process | Where-Object { $_.Name -match 'chrome|java|postgres' } | ForEach-Object { \"$($_.ProcessId)`t$($_.CommandLine)\" }",
+          // No double quotes inside the command: they do not survive Windows argument quoting reliably.
+          "Get-CimInstance Win32_Process | Where-Object { $_.Name -match 'chrome|java|postgres|pg_ctl' } | ForEach-Object { [string]$_.ProcessId + [char]9 + $_.CommandLine }",
         ],
         { encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 },
       );
@@ -41,9 +42,14 @@ function listProcesses(): Proc[] {
   }
 }
 
-/** Reads `--flag=value` or `-Dkey=value`, with or without quotes around the value. */
-function flag(cmd: string, name: string): string | null {
+/**
+ * Reads `--flag=value` or `-Dkey=value` from a command line. Handles the three ways a value with
+ * spaces gets quoted: `--flag="a b"`, `--flag='a b'` and, common on Windows, `"--flag=a b"`.
+ */
+export function flag(cmd: string, name: string): string | null {
   const esc = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const whole = new RegExp(`"${esc}=([^"]+)"`).exec(cmd);
+  if (whole) return whole[1];
   const m = new RegExp(`${esc}=(?:"([^"]+)"|'([^']+)'|(\\S+))`).exec(cmd);
   return m ? (m[1] ?? m[2] ?? m[3]) : null;
 }
@@ -156,7 +162,7 @@ export async function runDoctor(cfg: Config, projectDir: string | null): Promise
   }
   if (bases.size === 0) {
     md.push('- No running Tomcat (`-Dcatalina.base`) found. Start the server from IntelliJ and re-run.');
-    todo.push('Find `CATALINA_BASE` (IntelliJ prints it as "Using CATALINA_BASE" at the top of the server console).');
+    todo.push('Find `CATALINA_BASE` (IntelliJ prints it as "Using CATALINA_BASE" at the top of the server console; on Windows it is usually under `%LOCALAPPDATA%\\JetBrains\\<IDE version>\\tomcat\\`).');
   }
   for (const base of bases) {
     md.push(`- \`CATALINA_BASE\`: \`${base}\``);

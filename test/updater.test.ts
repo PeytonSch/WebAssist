@@ -170,3 +170,17 @@ describe('Updater', () => {
     expect(await updater({ url: null, bundled: makePayloadDir('0.1.0') }).update()).toEqual({ result: 'none' });
   });
 });
+
+describe('doctor flag parsing', async () => {
+  const { flag } = await import('../src/server/doctor');
+  it('reads Windows command lines, including a quoted whole argument and paths with spaces', () => {
+    const chrome = '"C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe" --remote-debugging-port=51234 --user-data-dir=C:\\Users\\me\\AppData\\Local\\JetBrains\\IntelliJIdea2026.2\\chrome-user-data-51234 http://localhost:5173';
+    expect(flag(chrome, '--remote-debugging-port')).toBe('51234');
+    expect(flag(chrome, '--user-data-dir')).toBe('C:\\Users\\me\\AppData\\Local\\JetBrains\\IntelliJIdea2026.2\\chrome-user-data-51234');
+    const java = 'C:\\jdk\\bin\\java.exe -Dfoo=1 "-Dcatalina.base=C:\\Users\\Jane Doe\\AppData\\Local\\JetBrains\\IntelliJIdea2026.2\\tomcat\\ab12" -Dcatalina.home=C:\\tomcat org.apache.catalina.startup.Bootstrap start';
+    expect(flag(java, '-Dcatalina.base')).toBe('C:\\Users\\Jane Doe\\AppData\\Local\\JetBrains\\IntelliJIdea2026.2\\tomcat\\ab12');
+    expect(flag(java, '-Dcatalina.home')).toBe('C:\\tomcat');
+    expect(flag('chrome --user-data-dir="/tmp/a b" --x', '--user-data-dir')).toBe('/tmp/a b');
+    expect(flag(java, '--missing')).toBeNull();
+  });
+});

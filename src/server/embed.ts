@@ -45,7 +45,8 @@ export async function startHub(configFile: string, uiDir: string): Promise<Runni
   const server = await startServer(hub, uiDir);
   return {
     port: config.port,
-    url: `http://localhost:${config.port}`,
+    // Not "localhost": Windows resolves that to ::1 first, and the hub only listens on IPv4.
+    url: `http://127.0.0.1:${config.port}`,
     sessionsDir: config.sessionsDir,
     configError: error,
     stop: async () => {

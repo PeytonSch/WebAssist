@@ -21,7 +21,8 @@
     "test": "vitest run",
     "app": "node scripts/build.mjs && electron .",
     "dist:mac": "node scripts/build.mjs && electron-builder --mac --publish never",
-    "release:assets": "node scripts/build.mjs --release"
+    "release:assets": "node scripts/build.mjs --release",
+    "dist:win": "node scripts/build.mjs && electron-builder --win --publish never"
   },
   "dependencies": {
     "ws": "^8.23.0"
@@ -77,11 +78,23 @@
     "dmg": {
       "title": "Debug Hub"
     },
-    "linux": {
+    "afterPack": "build/adhoc-sign.cjs",
+    "win": {
       "target": [
-        "dir"
-      ]
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "artifactName": "DebugHub-${version}-win-setup.${ext}"
     },
-    "afterPack": "build/adhoc-sign.cjs"
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "deleteAppDataOnUninstall": false,
+      "shortcutName": "Debug Hub"
+    }
   }
 }
