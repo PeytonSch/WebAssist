@@ -17,6 +17,8 @@ export class SessionStore {
   id = '';
   count = 0;
   private stream: WriteStream | null = null;
+  /** Earlier session files that are still flushing their last writes. */
+  private flushing = new Set<Promise<void>>();
 
   constructor(private dir: string) {
     mkdirSync(dir, { recursive: true });
@@ -24,7 +26,7 @@ export class SessionStore {
 
   /** Starts a new session file and makes it the live one. */
   start(): string {
-    this.stream?.end();
+    this.retire();
     const base = newSessionId();
     let id = base;
     // Create the file exclusively, so two sessions started in the same second never share one.
@@ -65,11 +67,19 @@ export class SessionStore {
       .sort((a, b) => (a.id < b.id ? 1 : -1));
   }
 
-  close(): Promise<void> {
-    return new Promise((resolve) => {
-      if (!this.stream) return resolve();
-      this.stream.end(resolve);
-      this.stream = null;
-    });
+  /** Ends the current stream and remembers it until its data is on disk. */
+  private retire(): void {
+    const stream = this.stream;
+    if (!stream) return;
+    this.stream = null;
+    const done = new Promise<void>((resolve) => stream.end(resolve));
+    this.flushing.add(done);
+    void done.then(() => this.flushing.delete(done));
+  }
+
+  /** Resolves once every session file, current and earlier, is fully written. */
+  async close(): Promise<void> {
+    this.retire();
+    await Promise.all(this.flushing);
   }
 }
