@@ -1,0 +1,50 @@
+name: Release
+
+# Push a tag like v0.2.0 to publish a release. Each release carries:
+#   latest.json + debug-hub-payload-<version>.json.gz   what installed apps download on launch
+#   DebugHub-<version>-mac.dmg                          the installer, for a computer's first install
+# Installed apps read https://github.com/<repo>/releases/latest/download/latest.json, so the
+# repository must be public. A manual run builds without publishing.
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      # The app compares this version to the latest release, so it must match the tag.
+      - name: Set version from tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: npm pkg set version="${GITHUB_REF_NAME#v}"
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run dist:mac
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      - run: npm run release:assets
+      - uses: actions/upload-artifact@v4
+        with:
+          name: DebugHub
+          path: |
+            out/*.dmg
+            release/*
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Debug Hub ${{ github.ref_name }}
+          files: |
+            out/*.dmg
+            release/latest.json
+            release/*.json.gz

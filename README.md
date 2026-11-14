@@ -21,7 +21,15 @@ Everything runs on your machine. The server binds to `127.0.0.1` and sends nothi
 
 Deviations from the plan are listed in `docs/decisions.md`.
 
-## Quick start
+## Desktop app
+
+Debug Hub also runs as a desktop app that updates itself: open it, a splash screen checks
+GitHub for a newer release, installs it, and the window opens on the new version. Download the
+`.dmg` from the releases page for the first install on a computer. Config and sessions are
+under the app's File menu. Releasing is `git tag vX.Y.Z && git push origin vX.Y.Z`; details in
+`docs/updates.md`.
+
+## Quick start (from source)
 
 Requires Node.js 18 or later.
 
@@ -119,6 +127,7 @@ other origins, so another site open in your browser cannot read a session.
 npm test              # unit tests (parsers, tailer, store, correlation)
 npm run acceptance    # end-to-end against a real Chrome; set CHROME_PATH if it is not found
 npm run typecheck
+npm run app           # the desktop app, from source
 ```
 
 ## Troubleshooting

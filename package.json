@@ -18,7 +18,10 @@
     "demo:hub": "node scripts/build.mjs && node dist/cli.js --config examples/demo.config.json",
     "acceptance": "node scripts/build.mjs && node scripts/acceptance.mjs",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "app": "node scripts/build.mjs && electron .",
+    "dist:mac": "node scripts/build.mjs && electron-builder --mac --publish never",
+    "release:assets": "node scripts/build.mjs --release"
   },
   "dependencies": {
     "ws": "^8.23.0"
@@ -26,8 +29,59 @@
   "devDependencies": {
     "@types/node": "^26.6.6",
     "@types/ws": "^8.18.2",
+    "electron": "^45.3.2",
+    "electron-builder": "^26.18.0",
     "esbuild": "^0.28.2",
     "typescript": "^7.0.2",
     "vitest": "^5.1.0"
+  },
+  "main": "dist/shell/main.cjs",
+  "productName": "Debug Hub",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/PeytonSch/WebAssist"
+  },
+  "debugHub": {
+    "minShell": 1
+  },
+  "build": {
+    "appId": "com.debughub.app",
+    "productName": "Debug Hub",
+    "directories": {
+      "output": "out"
+    },
+    "files": [
+      "dist/shell/**",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "dist/payload",
+        "to": "payload"
+      }
+    ],
+    "mac": {
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "universal"
+          ]
+        }
+      ],
+      "artifactName": "DebugHub-${version}-mac.${ext}",
+      "category": "public.app-category.developer-tools",
+      "identity": null,
+      "hardenedRuntime": false
+    },
+    "dmg": {
+      "title": "Debug Hub"
+    },
+    "linux": {
+      "target": [
+        "dir"
+      ]
+    },
+    "afterPack": "build/adhoc-sign.cjs"
   }
 }

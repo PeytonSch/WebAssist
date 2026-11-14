@@ -13,3 +13,6 @@
 | 9 | Postgres stats collector (optional). | Not built. | Optional in the plan, and it needs a live database to test against. |
 | 10 | Timestamps converted to a single time zone. | Log timestamps with no zone, or a zone abbreviation other than UTC/GMT, are read as the hub machine's local time. | Abbreviations such as `PST` are ambiguous. If Postgres has `log_timezone` set to something other than the machine's zone or UTC, its events will be offset. |
 | 11 | Session files kept or deleted (open question). | Kept. | Replay needs them. Delete files from `sessions/` to remove them. |
+| 12 | A local process with a web UI on `localhost:4000`. | Also ships as a desktop app (Electron) that updates itself from GitHub Releases. `npm start` still works. | Requested by the owner after the first build. See `updates.md`. |
+| 13 | n/a | The updater replaces a small payload in the user-data folder instead of the installed app, unlike GooseFluence's updater, which swaps the whole `.app`. | Updating has to finish before the window opens, so it must be fast; and leaving the bundle untouched keeps the ad-hoc signature valid. The cost: changes to the shell itself need a reinstall. |
+| 14 | n/a | macOS only in CI. | Matches the owner's GooseFluence setup. The updater and shell also ran on Linux during testing; Windows is untested. |

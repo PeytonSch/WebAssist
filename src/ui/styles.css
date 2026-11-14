@@ -238,7 +238,9 @@ select:focus-visible, .btn:focus-visible, .chip:focus-visible, input:focus-visib
   border-bottom: 1px solid var(--border);
   flex: none;
   overflow-x: auto;
+  scrollbar-width: none;
 }
+.filterbar::-webkit-scrollbar { display: none; }
 
 .search {
   display: flex;
