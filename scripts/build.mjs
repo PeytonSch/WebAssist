@@ -1,6 +1,6 @@
 // Builds everything into dist/:
 //   cli.js, ui/        the command-line hub (npm start)
-//   payload/           what the desktop app downloads on update: app.cjs + ui/ + payload.json
+//   payload/           what the desktop app downloads on update: app.cjs + preload.cjs + ui/ + payload.json
 //   shell/             the installed desktop shell: main.cjs, preload.cjs, splash.html
 // With --release it also writes release/latest.json and the packed payload for a GitHub Release.
 import { build } from 'esbuild';
@@ -27,6 +27,7 @@ await cp('src/ui/styles.css', 'dist/ui/styles.css');
 // The payload must be self-contained (no node_modules where it is unpacked), so ws is bundled in.
 // bufferutil and utf-8-validate are optional native speed-ups that ws works without.
 await build({ ...node, entryPoints: ['src/desktop/app.ts'], outfile: 'dist/payload/app.cjs', format: 'cjs', external: ['electron', 'bufferutil', 'utf-8-validate'] });
+await build({ ...node, entryPoints: ['src/desktop/preload.ts'], outfile: 'dist/payload/preload.cjs', format: 'cjs', external: ['electron'] });
 await cp('dist/ui', 'dist/payload/ui', { recursive: true });
 await writeFile('dist/payload/payload.json', JSON.stringify({ version: pkg.version, minShell: pkg.debugHub.minShell }) + '\n');
 

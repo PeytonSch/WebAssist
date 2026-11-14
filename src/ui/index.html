@@ -39,6 +39,10 @@
       <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"><path d="M13.5 9.5A6 6 0 0 1 6.5 2.5a5.5 5.5 0 1 0 7 7Z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg>
     </button>
     <button id="btn-help" class="btn btn-icon" title="Keyboard shortcuts (?)" aria-label="Keyboard shortcuts">?</button>
+    <button id="btn-settings" class="btn" title="Settings (Ctrl+,)">
+      <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M6.7 1.8h2.6l.4 1.8 1.2.7 1.8-.6 1.3 2.3-1.4 1.2v1.4l1.4 1.2-1.3 2.3-1.8-.6-1.2.7-.4 1.8H6.7l-.4-1.8-1.2-.7-1.8.6L2 9.8l1.4-1.2V7.2L2 6l1.3-2.3 1.8.6 1.2-.7Z" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/><circle cx="8" cy="8" r="2" fill="none" stroke="currentColor" stroke-width="1.3"/></svg>
+      Settings
+    </button>
   </header>
 
   <div class="filterbar">
@@ -77,6 +81,8 @@
     </section>
     <aside id="detail" class="detail" hidden></aside>
   </main>
+
+  <div id="settings" class="settings" hidden></div>
 
   <dialog id="prompt" class="dialog">
     <form method="dialog" id="prompt-form">

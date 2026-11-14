@@ -1,9 +1,16 @@
 import { createReadStream, existsSync } from 'node:fs';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
-import { extname, join, normalize, sep } from 'node:path';
+import { dirname, extname, isAbsolute, join, normalize, resolve, sep } from 'node:path';
 import { WebSocketServer, type WebSocket } from 'ws';
 import type { HubEvent, ServerMessage } from '../shared/types';
+import { matchPattern } from './collectors/tail';
+import { editableConfig, resolvePaths, saveConfig, validateConfig } from './config';
 import type { Hub } from './hub';
+
+export interface ServerOptions {
+  /** Where the settings screen reads and saves settings. */
+  configFile: string;
+}
 
 const MIME: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -37,8 +44,23 @@ function readBody(req: IncomingMessage, limit = 64 * 1024): Promise<string> {
   });
 }
 
-export function startServer(hub: Hub, uiDir: string): Promise<Server> {
+export function startServer(hub: Hub, uiDir: string, opts: ServerOptions): Promise<Server> {
   const port = hub.cfg.port;
+  const configDir = dirname(opts.configFile);
+  // Saves run one at a time, so two quick saves cannot interleave their reconfigures.
+  let saving: Promise<unknown> = Promise.resolve();
+
+  const saveSettings = async (input: unknown) => {
+    const { config, errors } = validateConfig(input);
+    if (errors.length) return { status: 400, body: { errors } };
+    try {
+      await hub.reconfigure(resolvePaths(structuredClone(config), configDir));
+    } catch (err) {
+      return { status: 400, body: { errors: [{ path: 'sessionsDir', message: `Cannot use this folder: ${(err as Error).message}` }] } };
+    }
+    saveConfig(opts.configFile, config);
+    return { status: 200, body: { config, restartNeeded: config.port !== port } };
+  };
   const hosts = new Set([`localhost:${port}`, `127.0.0.1:${port}`]);
   const origins = new Set([...hosts].map((h) => `http://${h}`));
 
@@ -73,6 +95,30 @@ export function startServer(hub: Hub, uiDir: string): Promise<Server> {
         res.writeHead(200, { 'content-type': 'application/x-ndjson; charset=utf-8', 'cache-control': 'no-store' });
         createReadStream(file).pipe(res);
         return;
+      }
+
+      if (path === '/api/config' && req.method === 'GET') {
+        return json(res, 200, { ...editableConfig(opts.configFile), runningPort: port });
+      }
+      if (path === '/api/config' && req.method === 'PUT') {
+        const input = JSON.parse((await readBody(req)) || 'null');
+        const done = saving.then(() => saveSettings(input));
+        saving = done.catch(() => undefined);
+        const out = await done;
+        return json(res, out.status, out.body);
+      }
+      if (path === '/api/config/match' && req.method === 'POST') {
+        const body = JSON.parse((await readBody(req)) || '{}');
+        const patterns: unknown[] = Array.isArray(body.patterns) ? body.patterns.slice(0, 50) : [];
+        const results = await Promise.all(
+          patterns.map(async (p) => {
+            const pattern = String(p ?? '').trim();
+            if (!pattern) return { pattern, resolved: '', files: [], problem: null };
+            const resolved = isAbsolute(pattern) ? pattern : resolve(configDir, pattern);
+            return { pattern, resolved, ...(await matchPattern(resolved)) };
+          }),
+        );
+        return json(res, 200, results);
       }
 
       if (path === '/api/markers' && req.method === 'POST') {

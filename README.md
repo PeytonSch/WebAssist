@@ -26,8 +26,8 @@ Deviations from the plan are listed in `docs/decisions.md`.
 Debug Hub also runs as a desktop app that updates itself: open it, a splash screen checks
 GitHub for a newer release, installs it, and the window opens on the new version. For the
 first install on a computer, download the Windows installer (or the macOS `.dmg`) from the
-releases page. Config and sessions are
-under the app's File menu. Releasing is `git tag vX.Y.Z && git push origin vX.Y.Z`; details in
+releases page. Everything is set up in **Settings** (File → Settings…, or `Ctrl+,`), which opens
+by itself on the first run; the sessions folder is under the File menu too. Releasing is `git tag vX.Y.Z && git push origin vX.Y.Z`; details in
 `docs/updates.md`.
 
 ## Quick start (from source)
@@ -52,12 +52,17 @@ Open http://localhost:4000 in any browser and click the buttons in the demo app.
 
 1. Start the IntelliJ session (Vite, Tomcat, Chrome) as usual.
 2. `npm run doctor -- --project /path/to/your/app --out docs/environment.md` and read the result.
-3. `cp debug-hub.config.example.json debug-hub.config.json` and fill in the paths `doctor` found.
-4. `npm start`, then open http://localhost:4000.
+3. `npm start`, open http://localhost:4000, click **Settings** and fill in the paths `doctor`
+   found.
 
 ## Configuration
 
-`debug-hub.config.json` in the directory you start the hub from (or `--config <file>`).
+The **Settings** screen edits everything below. Each log path shows which files it matches as
+you type, and saving applies the change at once without a restart (except `port`). Settings
+are stored in `debug-hub.config.json` in the directory you start the hub from (or
+`--config <file>`); in the desktop app, in its user-data folder. Keys added by hand are kept
+when Settings saves the file.
+
 Relative paths are relative to the config file. Everything is optional. Windows paths can be
 written with forward slashes or pasted as they are (`C:\Users\me\logs`).
 
