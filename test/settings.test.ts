@@ -61,7 +61,7 @@ describe('validateConfig', () => {
       { name: 'Postgres', command: 'net start postgresql-x64-16', cwd: '', wait: true },
       { name: 'Vite', command: '', cwd: 'C:/dev/web', wait: false },
     ]);
-    expect(errors.map((e) => e.path)).toEqual(['tomcat.startCommands.2.command', 'tomcat.preserveFiles.1']);
+    expect(errors.map((e) => e.path).sort()).toEqual(['tomcat.preserveFiles.1', 'tomcat.startCommands.2.command']);
   });
 
   it('refuses a Chrome port equal to the hub port', () => {
