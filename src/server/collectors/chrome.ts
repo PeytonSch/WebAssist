@@ -3,6 +3,7 @@ import type { CollectorStatus, HubEvent, Level } from '../../shared/types';
 import type { Config } from '../config';
 import { headerValue, makeEvent, redactHeaders, truncateText } from '../normalize';
 import { CdpConnection } from './cdp';
+import { describeProbe, hostPort, probeChrome } from './chrome-probe';
 
 interface PageSession {
   targetId: string;
@@ -91,7 +92,8 @@ const CONSOLE_LEVELS: Record<string, Level> = {
 
 /**
  * Attaches to an already-running Chrome over its remote debugging port. It never launches a
- * browser and never enables the Debugger domain, so it coexists with the IDE's own debugger.
+ * browser itself (Start Chrome in the UI does, see chrome-launch.ts) and never enables the
+ * Debugger domain, so it coexists with the IDE's own debugger.
  */
 export class ChromeCollector {
   status: CollectorStatus;
@@ -119,12 +121,8 @@ export class ChromeCollector {
     this.conn?.close();
   }
 
-  private get endpoint(): string {
-    return `http://${this.cfg.chrome.host}:${this.cfg.chrome.port}`;
-  }
-
   private waitingDetail(): string {
-    return `Waiting for Chrome's debugging port at ${this.cfg.chrome.host}:${this.cfg.chrome.port}`;
+    return `Waiting for Chrome's debugging port at ${hostPort(this.cfg.chrome.host, this.cfg.chrome.port)}`;
   }
 
   private setStatus(state: CollectorStatus['state'], detail: string): void {
@@ -135,25 +133,28 @@ export class ChromeCollector {
 
   private async loop(): Promise<void> {
     while (!this.stopped) {
+      let waiting = this.waitingDetail();
       try {
-        const res = await fetch(`${this.endpoint}/json/version`, { signal: AbortSignal.timeout(2000) });
-        const version = (await res.json()) as { webSocketDebuggerUrl?: string; Browser?: string };
-        if (!version.webSocketDebuggerUrl) throw new Error('No browser WebSocket URL');
-        // Chrome reports the URL with whatever host it bound to; always dial the configured one.
-        const wsUrl = new URL(version.webSocketDebuggerUrl);
-        wsUrl.hostname = this.cfg.chrome.host;
-        wsUrl.port = String(this.cfg.chrome.port);
-        const conn = await CdpConnection.connect(wsUrl.toString());
-        this.conn = conn;
-        const closed = new Promise<void>((resolve) => conn.once('close', resolve));
-        conn.on('event', (method, params, sessionId) => {
-          this.onEvent(method, params, sessionId).catch(() => undefined);
-        });
-        await conn.send('Target.setDiscoverTargets', { discover: true });
-        this.refreshStatus(version.Browser);
-        await closed;
+        const probe = await probeChrome(this.cfg.chrome.host, this.cfg.chrome.port);
+        if (probe.kind === 'chrome') {
+          // Chrome reports the URL with whatever host it bound to; dial the host that answered.
+          const wsUrl = new URL(probe.webSocketDebuggerUrl);
+          wsUrl.host = hostPort(probe.host, this.cfg.chrome.port);
+          const conn = await CdpConnection.connect(wsUrl.toString());
+          this.conn = conn;
+          const closed = new Promise<void>((resolve) => conn.once('close', resolve));
+          conn.on('event', (method, params, sessionId) => {
+            this.onEvent(method, params, sessionId).catch(() => undefined);
+          });
+          await conn.send('Target.setDiscoverTargets', { discover: true });
+          this.refreshStatus(probe.browser);
+          await closed;
+        } else {
+          // Say why: nothing listening, the wrong program on the port, or no answer.
+          waiting = describeProbe(probe, this.cfg.chrome.port);
+        }
       } catch {
-        /* Chrome is not up yet, or went away; retry below. */
+        /* Chrome went away while connecting or connected; retry below. */
       }
       this.conn = null;
       this.sessions.clear();
@@ -161,7 +162,7 @@ export class ChromeCollector {
       this.attaching.clear();
       this.net.clear();
       if (!this.stopped) {
-        this.setStatus('waiting', this.waitingDetail());
+        this.setStatus('waiting', waiting);
         await sleep(RETRY_MS);
       }
     }

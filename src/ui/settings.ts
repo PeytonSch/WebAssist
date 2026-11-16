@@ -1,6 +1,9 @@
 import type { DesktopBridge } from '../desktop/preload';
+import type { ChromeSetup } from '../server/chrome-launch';
 import type { Config, FieldError } from '../server/config';
+import { chromeArgs, chromeCommandLines, typicalChromePath } from '../shared/chrome-command';
 import type { HubStatus } from '../shared/types';
+import { CHROME_LAUNCH_EVENT, chromeButton, chromeLaunchNote } from './chrome';
 import { $, fmtBytes, h, type Child } from './dom';
 
 /**
@@ -261,6 +264,15 @@ function logsFolderInput(): HTMLElement {
   return h('div', {}, folderInput('tomcat.logsDir', 'Choose the Tomcat logs folder'), note);
 }
 
+function fileInput(path: string, title: string, placeholder?: string): HTMLElement {
+  const input = textInput(path, { mono: true, placeholder });
+  const browse = browseButton('file', title, () => input.value, (p) => {
+    input.value = p;
+    change(path, p);
+  });
+  return h('div', { class: 'input-row' }, input, browse);
+}
+
 /** Toggle chips for a list drawn from known values; unknown values already in the list are kept. */
 function chipToggles(path: string, known: string[]): HTMLElement {
   const wrap = h('div', { class: 'chips', role: 'group' });
@@ -451,8 +463,7 @@ function ago(iso: string): string {
   return `written ${Math.round(s / 86400)} d ago`;
 }
 
-function copyable(getText: () => string): HTMLElement {
-  const pre = h('code', { class: 'cmd' });
+function copyButton(getText: () => string): HTMLElement {
   const btn = h('button', { type: 'button', class: 'btn' }, 'Copy');
   btn.addEventListener('click', async () => {
     try {
@@ -463,6 +474,12 @@ function copyable(getText: () => string): HTMLElement {
       /* clipboard blocked; the text can still be selected */
     }
   });
+  return btn;
+}
+
+function copyable(getText: () => string): HTMLElement {
+  const pre = h('code', { class: 'cmd' });
+  const btn = copyButton(getText);
   const update = () => {
     pre.textContent = getText();
   };
@@ -485,15 +502,123 @@ interface SectionDef {
   fields: () => HTMLElement[];
 }
 
-function chromeCommand(): string {
-  const port = getPath('chrome.port') || 9222;
-  if (isWindows) {
-    return `"C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe" --remote-debugging-port=${port} --user-data-dir="%LOCALAPPDATA%\\DebugHub\\chrome-profile"`;
+// ── Chrome ──────────────────────────────────────────────
+// Which Chrome would start and with which profile folder is worked out by the hub (it knows the
+// machine and the settings file's folder), so the command shown has real paths in it.
+
+const C = {
+  setup: null as ChromeSetup | null,
+  /** The executable and profile folder the current setup was fetched for. */
+  key: null as string | null,
+  timer: 0,
+  launch: null as HTMLElement | null,
+  commands: null as HTMLElement | null,
+  exeNote: null as HTMLElement | null,
+  profileNote: null as HTMLElement | null,
+};
+
+const chromeKeys = ['port', 'host', 'executable', 'profileDir'] as const;
+/** Start Chrome uses the running settings, so it waits for edits to these to be saved. */
+const chromeUnsaved = () => chromeKeys.some((k) => getPath(`chrome.${k}`) !== S.loaded?.config.chrome[k]);
+
+function watchChromeSetup(): void {
+  const exe = String(getPath('chrome.executable') ?? '');
+  const profile = String(getPath('chrome.profileDir') ?? '');
+  const key = `${exe}\n${profile}`;
+  renderChromeSetup();
+  renderChromeLaunch();
+  if (key === C.key) return;
+  C.key = key;
+  clearTimeout(C.timer);
+  C.timer = window.setTimeout(async () => {
+    try {
+      const q = new URLSearchParams({ executable: exe, profileDir: profile });
+      const setup: ChromeSetup = await (await fetch(`/api/chrome/setup?${q}`)).json();
+      if (C.key !== key) return;
+      C.setup = setup;
+      renderChromeSetup();
+    } catch {
+      /* the hub is gone; the socket handler shows that */
+    }
+  }, C.setup ? 300 : 0);
+}
+
+function renderChromeSetup(): void {
+  const setup = C.setup;
+  if (!C.commands || !C.exeNote || !C.profileNote) return;
+  if (!setup) {
+    C.commands.replaceChildren(h('div', { class: 'list-empty' }, 'Finding Chrome…'));
+    return;
   }
-  if (isMac) {
-    return `"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --remote-debugging-port=${port} --user-data-dir="$HOME/Library/Application Support/DebugHub/chrome-profile"`;
-  }
-  return `google-chrome --remote-debugging-port=${port} --user-data-dir="$HOME/.config/debughub-chrome"`;
+  const port = Number(getPath('chrome.port')) || 9222;
+  const exe = setup.executable ?? typicalChromePath(setup.platform);
+  const lines = chromeCommandLines(setup.platform, exe, chromeArgs(port, setup.profileDir));
+  C.commands.replaceChildren(
+    ...lines.map((l) =>
+      h(
+        'div',
+        { class: 'cmd-block' },
+        lines.length > 1 ? h('div', { class: 'cmd-label' }, l.label) : null,
+        h('div', { class: 'cmd-row' }, h('code', { class: 'cmd' }, l.text), copyButton(() => l.text)),
+      ),
+    ),
+  );
+  C.exeNote.replaceChildren(
+    setup.executable
+      ? h('span', { class: 'pm ok' }, setup.source === 'settings' ? 'Found' : `Found ${setup.executable}`)
+      : h('span', { class: 'pm warn' }, setup.problem ?? 'Chrome was not found'),
+  );
+  C.profileNote.replaceChildren(h('span', { class: 'pm muted' }, `Full path: ${setup.profileDir}`));
+}
+
+function renderChromeLaunch(): void {
+  if (!C.launch) return;
+  const connected = S.status?.collectors.find((c) => c.name === 'Chrome')?.state === 'connected';
+  const unsaved = chromeUnsaved();
+  const note = unsaved
+    ? h('div', { class: 'launch-note' }, h('span', { class: 'pm warn' }, 'Save first: Start Chrome uses the saved settings.'))
+    : connected
+      ? h('div', { class: 'launch-note' }, h('span', { class: 'pm ok' }, 'Debug Hub is connected to Chrome.'))
+      : chromeLaunchNote();
+  C.launch.replaceChildren(chromeButton({ disabled: unsaved || connected }), ...(note ? [note] : []));
+}
+
+function chromeFields(): HTMLElement[] {
+  C.launch = h('div', { class: 'launch' });
+  C.commands = h('div', { class: 'cmd-list' });
+  C.exeNote = h('div', { class: 'list-note' });
+  C.profileNote = h('div', { class: 'list-note' });
+  C.key = null;
+  S.derived.push(watchChromeSetup);
+  const fields = [
+    field('chrome.port', 'Debugging port', numberInput('chrome.port', { min: 1, max: 65535 }), 'Chrome’s --remote-debugging-port.'),
+    field(
+      null,
+      'Start Chrome',
+      C.launch,
+      'Opens Chrome with the debugging port, on the profile folder below, so it starts without your usual sign-ins. Close other Chrome windows that use that folder first.',
+    ),
+    field(
+      null,
+      'Or start it yourself',
+      C.commands,
+      'For a terminal, a shortcut or IntelliJ. Close other Chrome windows that use this profile folder first: a Chrome already running on it takes over and drops the flags.',
+    ),
+    field(
+      'chrome.profileDir',
+      'Profile folder',
+      h('div', {}, folderInput('chrome.profileDir', 'Choose Chrome’s profile folder'), C.profileNote),
+      'Chrome’s --user-data-dir. Chrome 136 and later only open the debugging port with a profile folder of its own. A relative path is relative to the settings file.',
+    ),
+    field(
+      'chrome.executable',
+      'Chrome program',
+      h('div', {}, fileInput('chrome.executable', 'Choose the Chrome program', 'Found automatically'), C.exeNote),
+      'Leave empty to find Chrome automatically.',
+    ),
+  ];
+  watchChromeSetup();
+  return fields;
 }
 
 const RESOURCE_TYPES = ['Document', 'XHR', 'Fetch', 'EventSource', 'Script', 'Stylesheet', 'Other'];
@@ -535,13 +660,7 @@ function sections(): SectionDef[] {
       enable: 'chrome.enabled',
       collectors: ['Chrome'],
       fields: () => [
-        field('chrome.port', 'Debugging port', numberInput('chrome.port', { min: 1, max: 65535 }), 'Chrome’s --remote-debugging-port.'),
-        field(
-          null,
-          'Start Chrome',
-          copyable(chromeCommand),
-          'Chrome only allows remote debugging with its own profile folder, so it opens without your usual sign-ins. Close other Chrome windows that use this profile first.',
-        ),
+        ...chromeFields(),
         field('chrome.captureBodies', 'Capture response bodies', toggle('chrome.captureBodies', 'Capture response bodies'), 'Text and JSON bodies, up to the size limit under Privacy and limits.'),
         field('chrome.bodyResourceTypes', 'Capture bodies for', chipToggles('chrome.bodyResourceTypes', RESOURCE_TYPES), 'XHR and Fetch are API calls; Document is the page itself.'),
       ],
@@ -937,12 +1056,16 @@ export function closeSettings(): boolean {
 
 export function updateSettingsStatus(status: HubStatus): void {
   S.status = status;
-  if (S.open) renderStatusSlots();
+  if (S.open) {
+    renderStatusSlots();
+    renderChromeLaunch();
+  }
 }
 
 export function initSettings(opts: { onToggle: (open: boolean) => void }): void {
   onToggle = opts.onToggle;
   desktop?.onOpenSettings(openSettings);
+  window.addEventListener(CHROME_LAUNCH_EVENT, () => S.open && renderChromeLaunch());
   const sync = () => (location.hash.startsWith('#settings') ? openSettings() : closeSettings());
   window.addEventListener('hashchange', sync);
   sync();

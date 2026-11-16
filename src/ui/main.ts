@@ -1,5 +1,6 @@
 import { correlate, type CorrItem, type Correlation } from '../shared/correlate';
 import type { HubEvent, HubStatus, Level, ServerMessage, SessionInfo } from '../shared/types';
+import { CHROME_LAUNCH_EVENT, chromeButton, chromeLaunching, chromeLaunchNote, startChrome } from './chrome';
 import { $, fmtBytes, h, type Child } from './dom';
 import { initSettings, openSettings, settingsOpen, updateSettingsStatus } from './settings';
 import { initTitlebar } from './titlebar';
@@ -430,6 +431,25 @@ function renderEmpty(): void {
     h('h3', {}, state.connected ? 'Recording. Waiting for the first event' : 'Not connected to the hub'),
     h('div', {}, state.connected ? 'Use your app and events will appear here as they happen.' : 'Is debug-hub still running? Reconnecting…'),
     list,
+    ...(chromeWaiting() ? [chromeHelp()] : []),
+  );
+}
+
+/** The Chrome collector while it cannot reach Chrome, in the live view of a running hub. */
+function chromeWaiting() {
+  const c = state.status?.collectors.find((x) => x.name === 'Chrome');
+  return state.connected && state.mode === 'live' && c?.state === 'waiting' ? c : null;
+}
+
+/** Why Chrome is not connected (the lines after the first of its status) and a way to fix it. */
+function chromeHelp(): HTMLElement {
+  const hint = chromeWaiting()?.detail.split('\n').slice(1).join(' ') ?? '';
+  return h(
+    'div',
+    { class: 'empty-chrome' },
+    hint ? h('p', {}, ...hint.split(/(--[\w-]+)/).map((part, i) => (i % 2 ? h('code', {}, part) : part))) : null,
+    chromeButton({ primary: true }),
+    chromeLaunchNote(),
   );
 }
 
@@ -849,8 +869,11 @@ function renderDetail(): void {
 
 function renderStatus(): void {
   const s = state.status;
+  const waitingChrome = chromeWaiting();
   $('collectors').replaceChildren(
-    ...(s?.collectors ?? []).map((c) => h('span', { class: `collector ${c.state}`, title: c.detail }, c.name)),
+    ...(s?.collectors ?? []).map((c) =>
+      c === waitingChrome ? chromeStartPill(c.detail) : h('span', { class: `collector ${c.state}`, title: c.detail }, c.name),
+    ),
   );
   const mode = $('mode');
   if (!state.connected) {
@@ -869,6 +892,31 @@ function renderStatus(): void {
   $<HTMLButtonElement>('btn-new').disabled = !state.connected;
   $('btn-follow').classList.toggle('active', state.follow && live);
   if (state.rows.length === 0) renderEmpty();
+}
+
+/**
+ * While Chrome is not connected its status pill becomes the Start Chrome button: the top bar
+ * has no room for another one.
+ */
+function chromeStartPill(detail: string): HTMLElement {
+  const btn = h(
+    'button',
+    { type: 'button', class: 'collector waiting collector-start', title: `${detail.split('\n')[0]}\nClick to start Chrome with its debugging port.` },
+    chromeLaunching() ? 'Starting…' : 'Start Chrome',
+  ) as HTMLButtonElement;
+  btn.disabled = chromeLaunching();
+  btn.onclick = () => void startChromeFromTopbar();
+  return btn;
+}
+
+/** Top-bar Start Chrome: the result shows as a toast, since the bar has no room for it. */
+async function startChromeFromTopbar(): Promise<void> {
+  const r = await startChrome();
+  const el = h('div', { class: `toast launch-toast${r.ok ? '' : ' failed'}`, role: 'status' }, r.message, r.hint ? h('small', {}, r.hint) : null);
+  document.body.append(el);
+  const ms = r.ok ? 2500 : 7000;
+  setTimeout(() => el.classList.add('out'), ms);
+  setTimeout(() => el.remove(), ms + 400);
 }
 
 const sessionLabel = (id: string) => id.replace(/^(\d{4}-\d\d-\d\d)_(\d\d)-(\d\d)-(\d\d)/, '$1 $2:$3:$4');
@@ -1078,6 +1126,7 @@ function init(): void {
   $('presets').addEventListener('change', () => void onPresetChange());
   $('session').addEventListener('change', () => void openSession($<HTMLSelectElement>('session').value));
 
+  window.addEventListener(CHROME_LAUNCH_EVENT, () => renderStatus());
   $('btn-marker').onclick = () => void addMarker();
   $('btn-follow').onclick = () => setFollow(!state.follow);
   $('sort-time').onclick = () => setNewestFirst(!state.newestFirst);

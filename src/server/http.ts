@@ -4,6 +4,7 @@ import { dirname, extname, isAbsolute, join, normalize, resolve, sep } from 'nod
 import { WebSocketServer, type WebSocket } from 'ws';
 import type { HubEvent, ServerMessage } from '../shared/types';
 import { scanLogsFolder } from './collectors/logsdir';
+import { chromeSetup, startChrome } from './chrome-launch';
 import { matchPattern } from './collectors/tail';
 import { editableConfig, resolvePaths, saveConfig, validateConfig } from './config';
 import type { Hub } from './hub';
@@ -133,6 +134,17 @@ export function startServer(hub: Hub, uiDir: string, opts: ServerOptions): Promi
         if (!dir) return json(res, 200, null);
         const lists = (v: unknown) => (Array.isArray(v) ? v.slice(0, 50).map(abs).filter(Boolean) : []);
         return json(res, 200, await scanLogsFolder(dir, lists(body.appLogs), lists(body.accessLogs)));
+      }
+
+      if (path === '/api/chrome/setup' && req.method === 'GET') {
+        // The settings screen passes its unsaved values; without them, the running settings.
+        const q = url.searchParams;
+        const exe = q.has('executable') ? q.get('executable')! : hub.cfg.chrome.executable;
+        const profile = q.has('profileDir') ? q.get('profileDir')! : hub.cfg.chrome.profileDir;
+        return json(res, 200, chromeSetup(exe, profile, configDir));
+      }
+      if (path === '/api/chrome/launch' && req.method === 'POST') {
+        return json(res, 200, await startChrome(hub.cfg, configDir));
       }
 
       if (path === '/api/markers' && req.method === 'POST') {
