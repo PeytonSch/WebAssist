@@ -44,7 +44,7 @@ describe('tomcat application log', () => {
     '\t\t... 6 more',
   ];
   it('only timestamped lines start an entry', () => {
-    expect(entry.map(isTomcatEntryStart)).toEqual([true, false, false, false, false, false, false]);
+    expect(entry.map((l) => isTomcatEntryStart(l))).toEqual([true, false, false, false, false, false, false]);
   });
   it('keeps the whole stack trace in one event', () => {
     const ev = parseTomcatEntry(entry, ctx);
@@ -71,6 +71,94 @@ describe('tomcat application log', () => {
     expect(ev.level).toBe('error');
     expect(ev.tsMs).toBe(1_000);
     expect(ev.summary).toContain('NullPointerException: boom');
+  });
+});
+
+describe('tomcat log levels and entry starts', () => {
+  const starts = (lines: string[]) => {
+    const out: boolean[] = [];
+    lines.forEach((l, i) => out.push(isTomcatEntryStart(l, i > 0 ? [lines[i - 1]] : undefined)));
+    return out;
+  };
+
+  it('reads JUL FINE/FINER/FINEST as debug and CONFIG as info', () => {
+    expect(parseTomcatEntry(['16-Nov-2026 10:00:00.123 FINE [main] org.apache.catalina.startup.HostConfig.deployDirectory Deploying'], ctx).level).toBe('debug');
+    expect(parseTomcatEntry(['16-Nov-2026 10:00:00.123 FINEST [main] o.a.c.Foo.bar x'], ctx).level).toBe('debug');
+    expect(parseTomcatEntry(['16-Nov-2026 10:00:00.123 CONFIG [main] o.a.c.Foo.bar x'], ctx).level).toBe('info');
+  });
+  it('reads the level of Logback’s default layout, which has no date', () => {
+    const ev = parseTomcatEntry(['10:02:11.123 [http-nio-8080-exec-1] DEBUG com.x.OrderService - Loading order 42'], ctx);
+    expect(ev.level).toBe('debug');
+    expect(ev.data!.thread).toBe('http-nio-8080-exec-1');
+    expect(ev.summary).toBe('com.x.OrderService - Loading order 42');
+  });
+  it('starts an entry at a level-first line, with the timestamp after the level', () => {
+    const line = 'DEBUG 2026-11-16 10:00:00.123 [main] com.x.Y - cache warmed';
+    expect(isTomcatEntryStart(line)).toBe(true);
+    const ev = parseTomcatEntry([line], ctx);
+    expect(ev.level).toBe('debug');
+    expect(ev.tsMs).toBe(local(2026, 11, 16, 10, 0, 0, 123));
+    expect(ev.data!.thread).toBe('main');
+    expect(ev.summary).toBe('com.x.Y - cache warmed');
+  });
+  it('starts an entry at a level-first line without any timestamp (console appenders in catalina.out)', () => {
+    const lines = [
+      'DEBUG com.x.Y - first',
+      'DEBUG com.x.Y - second',
+      '[DEBUG] bracketed',
+      '[INFO ] padded by Log4j',
+      '1234 [main] DEBUG com.x.Y - Log4j TTCC',
+      '[main] TRACE com.x.Y - thread first',
+    ];
+    expect(starts(lines)).toEqual([true, true, true, true, true, true]);
+    const levels = lines.map((l) => parseTomcatEntry([l], ctx).level);
+    expect(levels).toEqual(['debug', 'debug', 'debug', 'info', 'debug', 'debug']);
+    const ev = parseTomcatEntry([lines[0]], ctx);
+    expect(ev.tsMs).toBe(1_000);
+    expect(ev.summary).toBe('com.x.Y - first');
+  });
+  it('keeps stack traces as continuation lines', () => {
+    const lines = [
+      'ERROR com.x.Y - could not save',
+      'java.lang.IllegalStateException: no stock',
+      '\tat com.x.Y.save(Y.java:12)',
+      '\t... 4 more',
+      'Caused by: java.sql.SQLException: lock timeout',
+    ];
+    expect(starts(lines)).toEqual([true, false, false, false, false]);
+    const ev = parseTomcatEntry(lines, ctx);
+    expect(ev.level).toBe('error');
+    expect(ev.data!.rootCause).toBe('java.sql.SQLException: lock timeout');
+  });
+  it('does not take a level word inside the message for the level', () => {
+    const ev = parseTomcatEntry(['16-Nov-2026 10:00:00.123 FINE [main] c.x.Y.z WARN: is only text here'], ctx);
+    expect(ev.level).toBe('debug');
+    expect(ev.summary).toBe('c.x.Y.z WARN: is only text here');
+  });
+  it('splits catalina.out that mixes Tomcat JUL lines with an app’s stdout', () => {
+    const lines = [
+      '16-Nov-2026 10:00:00.123 INFO [main] org.apache.catalina.startup.Catalina.start Server startup in [2345] milliseconds',
+      '10:00:01.001 [http-nio-8080-exec-1] DEBUG com.x.OrderController - GET /orders',
+      'DEBUG com.x.OrderRepository - select * from orders',
+      'DEBUG com.x.OrderRepository - 2 rows',
+      '16-Nov-2026 10:00:02.000 WARNING [http-nio-8080-exec-2] org.apache.catalina.Foo.bar slow',
+    ];
+    expect(starts(lines)).toEqual([true, true, true, true, true]);
+    expect(lines.map((l) => parseTomcatEntry([l], ctx).level)).toEqual(['info', 'debug', 'debug', 'debug', 'warn']);
+  });
+  it('joins JUL SimpleFormatter’s two-line records and takes the level from the second line', () => {
+    const lines = ['Nov 16, 2026 10:00:00 AM com.x.OrderService save', 'FINE: Saved order 43', 'Nov 16, 2026 1:05:00 PM com.x.OrderService load', 'INFO: Loaded'];
+    expect(starts(lines)).toEqual([true, false, true, false]);
+    const ev = parseTomcatEntry(lines.slice(0, 2), ctx);
+    expect(ev.level).toBe('debug');
+    expect(ev.tsMs).toBe(local(2026, 11, 16, 10, 0, 0));
+    expect(ev.summary).toBe('Saved order 43');
+    expect(parseTomcatEntry(lines.slice(2), ctx).tsMs).toBe(local(2026, 11, 16, 13, 5, 0));
+  });
+  it('does not start entries at prose or exception lines', () => {
+    for (const l of ['java.lang.NullPointerException: boom', 'Caused by: x.Y: z', 'Information about the order', 'DEBUGGING is fun', '  DEBUG indented']) {
+      expect(isTomcatEntryStart(l)).toBe(false);
+    }
   });
 });
 

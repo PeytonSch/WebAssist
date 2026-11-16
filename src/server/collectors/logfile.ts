@@ -22,14 +22,15 @@ export class EntryGrouper {
   private pending = new Map<string, Pending>();
 
   constructor(
-    private isStart: (line: string) => boolean,
+    /** `pending` is the entry collected so far, for formats where that decides it. */
+    private isStart: (line: string, pending?: readonly string[]) => boolean,
     private flushMs: number,
     private onEntry: (file: string, lines: string[], firstSeenMs: number) => void,
   ) {}
 
   push(file: string, line: string): void {
     let p = this.pending.get(file);
-    if (p && (this.isStart(line) || p.lines.length >= MAX_ENTRY_LINES)) {
+    if (p && (this.isStart(line, p.lines) || p.lines.length >= MAX_ENTRY_LINES)) {
       this.flush(file);
       p = undefined;
     }
