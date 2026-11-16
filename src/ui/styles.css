@@ -295,16 +295,14 @@ select:focus-visible, .btn:focus-visible, .chip:focus-visible, input:focus-visib
 .filterbar {
   display: flex;
   align-items: center;
-  gap: 10px;
-  height: 48px;
-  padding: 0 16px;
+  flex-wrap: wrap;
+  gap: 8px 10px;
+  min-height: 48px;
+  padding: 9px 16px;
   background: var(--surface);
   border-bottom: 1px solid var(--border);
   flex: none;
-  overflow-x: auto;
-  scrollbar-width: none;
 }
-.filterbar::-webkit-scrollbar { display: none; }
 
 .search {
   display: flex;
@@ -1220,9 +1218,33 @@ a.tm-path:hover { text-decoration: underline; }
   .tm-row { grid-template-columns: minmax(0, 1fr) auto auto; }
   .tm-row > :nth-child(2), .tm-row > :nth-child(4) { display: none; }
 }
-/* The top bar is crowded at the desktop app's minimum width. */
-@media (max-width: 1360px) {
-  #btn-tomcat .btn-label { display: none; }
+/* ── Crowded top bar ─────────────────────────────────── */
+/* The top bar holds more than fits at the desktop app's smaller sizes, more so on Windows and
+   Linux where it also carries the menu and window buttons (data-frame="custom"). As the window
+   narrows: the session menu shrinks, collectors become their status dots (the name and detail
+   stay in the tooltip), buttons drop their labels, and last the "Debug Hub" text goes. */
+
+.topbar > * { flex-shrink: 0; }
+.brand { white-space: nowrap; }
+.session { flex: 0 1 330px; min-width: 150px; }
+.session select { flex: 1; width: 0; min-width: 0; }
+
+@media (max-width: 1700px) {
+  :root[data-frame="custom"] .collector-name { display: none; }
+  :root[data-frame="custom"] .collector:not(.collector-start) { gap: 0; padding: 0 8px; }
+}
+@media (max-width: 1520px) {
+  .collector-name { display: none; }
+  .collector:not(.collector-start) { gap: 0; padding: 0 8px; }
+}
+@media (max-width: 1420px) {
+  :root[data-frame="custom"] .topbar .btn-label { display: none; }
+}
+@media (max-width: 1260px) {
+  .topbar .btn-label { display: none; }
+}
+@media (max-width: 1150px) {
+  :root[data-frame="custom"] .brand span { display: none; }
 }
 @media (max-width: 1000px) {
   .brand span { display: none; }

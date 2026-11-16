@@ -887,7 +887,7 @@ function renderStatus(): void {
   const waitingChrome = chromeWaiting();
   $('collectors').replaceChildren(
     ...(s?.collectors ?? []).map((c) =>
-      c === waitingChrome ? chromeStartPill(c.detail) : h('span', { class: `collector ${c.state}`, title: c.detail }, c.name),
+      c === waitingChrome ? chromeStartPill(c.detail) : h('span', { class: `collector ${c.state}`, title: `${c.name}: ${c.detail}` }, h('span', { class: 'collector-name' }, c.name)),
     ),
   );
   const mode = $('mode');
