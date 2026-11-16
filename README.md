@@ -115,9 +115,11 @@ into the error above them.
 - Select a row for details. For a browser request the panel shows the server events that
   share its request ID, or, when there is no ID, events matched by path and time (labelled as
   such).
+- Click the Time column header (or press `O`) to show the newest events at the top instead
+  of the bottom. Follow then keeps the top of the list in view. The choice is remembered.
 - The session menu switches between the live session and saved ones.
 - Shortcuts: `/` search, `M` marker, `J`/`K` or arrows to move, `E` errors only, `F` follow,
-  `R` reset filters, `Esc` close, `?` help.
+  `O` newest/oldest first, `R` reset filters, `Esc` close, `?` help.
 
 ## Sessions and privacy
 

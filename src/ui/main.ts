@@ -97,6 +97,8 @@ const state = {
   selected: null as Row | null,
   relatedKeys: new Set<string>(),
   follow: true,
+  /** Show the latest events at the top. `rows` stays oldest-first; only `view` is reversed. */
+  newestFirst: load<boolean>('dh.newestFirst', false),
   filters: { ...DEFAULT_FILTERS, ...load<Partial<Filters>>('dh.filters', {}) } as Filters,
   presets: load<Preset[]>('dh.presets', []),
 };
@@ -248,11 +250,23 @@ function refilter(): void {
     if (r.ev.kind !== 'marker') counts[levelOf(r)]++;
     if (passes(r, off, terms)) view.push(r);
   }
+  if (state.newestFirst) view.reverse();
+  // Newest-first, live events land above whatever is being read. Unless following, keep the
+  // row at the top of the viewport where it is instead of letting it slide down.
+  const following = state.follow && state.mode === 'live';
+  const anchorIdx = Math.floor(viewport.scrollTop / ROW_H);
+  const anchor = state.newestFirst && state.mode === 'live' && !following ? state.view[anchorIdx] : undefined;
+  const anchorOffset = viewport.scrollTop - anchorIdx * ROW_H;
   state.view = view;
   state.counts = counts;
+  spacerEl.style.height = `${view.length * ROW_H}px`;
+  if (following) scrollToNewest();
+  else if (anchor) {
+    const i = view.indexOf(anchor);
+    if (i !== -1) viewport.scrollTop = i * ROW_H + anchorOffset;
+  }
   renderChips();
   renderList();
-  if (state.follow && state.mode === 'live') viewport.scrollTop = viewport.scrollHeight;
 }
 
 function setFilters(next: Partial<Filters>): void {
@@ -453,7 +467,40 @@ function move(delta: number): void {
 function setFollow(on: boolean): void {
   state.follow = on;
   $('btn-follow').classList.toggle('active', on && state.mode === 'live');
-  if (on && state.mode === 'live') viewport.scrollTop = viewport.scrollHeight;
+  if (on && state.mode === 'live') scrollToNewest();
+}
+
+function scrollToNewest(): void {
+  viewport.scrollTop = state.newestFirst ? 0 : viewport.scrollHeight;
+}
+
+function atNewest(): boolean {
+  const fromEdge = state.newestFirst
+    ? viewport.scrollTop
+    : viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight;
+  return fromEdge < ROW_H * 2;
+}
+
+function setNewestFirst(on: boolean): void {
+  if (on === state.newestFirst) return;
+  // Mirror the scroll position so the same stretch of events stays on screen.
+  const mirrored = Math.max(0, state.view.length * ROW_H - viewport.scrollTop - viewport.clientHeight);
+  state.newestFirst = on;
+  save('dh.newestFirst', on);
+  state.view.reverse();
+  renderOrder();
+  if (state.follow && state.mode === 'live') scrollToNewest();
+  else viewport.scrollTop = mirrored;
+  renderList();
+}
+
+function renderOrder(): void {
+  const btn = $('sort-time');
+  const label = state.newestFirst ? 'Newest first' : 'Oldest first';
+  btn.classList.toggle('desc', state.newestFirst);
+  btn.title = `${label}. Click to show ${state.newestFirst ? 'oldest' : 'newest'} first (O)`;
+  btn.setAttribute('aria-label', `Time, ${label.toLowerCase()}`);
+  $('btn-follow').classList.toggle('newest-top', state.newestFirst);
 }
 
 // ── Detail panel ────────────────────────────────────────
@@ -893,14 +940,15 @@ function init(): void {
   $<HTMLInputElement>('q').value = state.filters.q;
   $<HTMLInputElement>('f-static').checked = state.filters.hideStatic;
   renderChips();
+  renderOrder();
   syncPresetSelect();
   renderStatus();
 
   viewport.addEventListener('scroll', () => {
-    const atBottom = viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight < ROW_H * 2;
-    if (state.mode === 'live' && atBottom !== state.follow) {
-      state.follow = atBottom;
-      $('btn-follow').classList.toggle('active', atBottom);
+    const atEdge = atNewest();
+    if (state.mode === 'live' && atEdge !== state.follow) {
+      state.follow = atEdge;
+      $('btn-follow').classList.toggle('active', atEdge);
     }
     renderList();
   }, { passive: true });
@@ -923,6 +971,7 @@ function init(): void {
 
   $('btn-marker').onclick = () => void addMarker();
   $('btn-follow').onclick = () => setFollow(!state.follow);
+  $('sort-time').onclick = () => setNewestFirst(!state.newestFirst);
   $('btn-new').onclick = async () => {
     await fetch('/api/sessions/new', { method: 'POST' });
   };
@@ -956,6 +1005,7 @@ function init(): void {
       case 'j': case 'ArrowDown': e.preventDefault(); move(1); break;
       case 'k': case 'ArrowUp': e.preventDefault(); move(-1); break;
       case 'f': case 'F': setFollow(!state.follow); break;
+      case 'o': case 'O': setNewestFirst(!state.newestFirst); break;
       case 'e': case 'E': {
         const errorsOnly = ['level:info', 'level:debug'];
         const on = errorsOnly.every((x) => state.filters.off.includes(x));

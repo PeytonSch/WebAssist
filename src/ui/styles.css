@@ -397,6 +397,25 @@ main {
   padding-left: 16px;
 }
 .thead .c-status, .thead .c-dur { text-align: right; }
+.thead .sort {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  justify-self: start;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  cursor: pointer;
+}
+.thead .sort:hover { color: var(--text); }
+.thead .sort svg { transition: transform 0.15s; }
+/* The arrow points the way time runs down the list. */
+.thead .sort.desc svg { transform: scaleY(-1); }
+#btn-follow.newest-top svg { transform: scaleY(-1); }
 
 .viewport {
   position: relative;
