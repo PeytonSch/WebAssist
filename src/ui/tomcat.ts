@@ -1,4 +1,4 @@
-import type { ScriptKind, ScriptRun, TomcatState, WarInfo, WebappAction, WebappInfo } from '../shared/tomcat';
+import type { AppFolder, DeleteItem, KeepPreview, ScriptKind, ScriptRun, TomcatState, WarInfo, WebappAction, WebappInfo } from '../shared/tomcat';
 import { $, fmtBytes, h, type Child } from './dom';
 import { closeSettings, openSettings, settingsOpen } from './settings';
 
@@ -56,8 +56,9 @@ function ago(iso: string | null): string {
   return new Date(iso).toLocaleDateString();
 }
 
-function button(label: string, onClick: () => void, opts: { primary?: boolean; disabled?: boolean; title?: string } = {}): HTMLButtonElement {
-  const b = h('button', { type: 'button', class: `btn btn-sm${opts.primary ? ' btn-primary' : ''}`, title: opts.title }, label) as HTMLButtonElement;
+function button(label: string, onClick: () => void, opts: { primary?: boolean; danger?: boolean; disabled?: boolean; title?: string } = {}): HTMLButtonElement {
+  const cls = `btn btn-sm${opts.primary ? ' btn-primary' : ''}${opts.danger ? ' btn-danger-quiet' : ''}`;
+  const b = h('button', { type: 'button', class: cls, title: opts.title }, label) as HTMLButtonElement;
   b.disabled = !!opts.disabled;
   b.addEventListener('click', onClick);
   return b;
@@ -80,6 +81,22 @@ function nameProblem(name: string): string | null {
     return 'Use letters, digits and . _ - # ~ + @ ( ) only, starting with a letter or digit.';
   }
   return null;
+}
+
+/** The file manager's name, for "Show in Explorer" and the like. */
+const FILE_MANAGER = /Windows/.test(navigator.userAgent) ? 'Explorer' : /Mac/.test(navigator.userAgent) ? 'Finder' : null;
+
+/** Opens the file manager on a watched WAR, a webapp or one of the two folders (the hub checks which). */
+function revealButton(target: { file: string } | { from: AppFolder; name?: string }, title?: string): HTMLButtonElement {
+  const label = FILE_MANAGER ? `${'file' in target ? 'Show' : 'Open'} in ${FILE_MANAGER}` : 'Open folder';
+  const b = button(label, () => {
+    void api('/api/tomcat/reveal', target).catch((err) => {
+      T.banner = { kind: 'error', text: (err as Error).message };
+      if (T.open) render();
+    });
+  }, { title });
+  b.classList.add('btn-ghost');
+  return b;
 }
 
 const contextPath = (name: string) => {
@@ -276,6 +293,15 @@ function webappRow(s: TomcatState, app: WebappInfo): HTMLElement {
       }),
     );
   }
+  if (!app.external) {
+    actions.push(
+      button('Delete…', () => void openDelete(app), {
+        danger: true,
+        disabled: busy || (own && app.state !== 'disabled'),
+        title: own && app.state !== 'disabled' ? 'This is the Manager itself' : `Delete its files from the ${app.state === 'disabled' ? 'disabled' : 'webapps'} folder for good`,
+      }),
+    );
+  }
   const kinds = [app.hasWar && 'WAR', app.hasDir && 'folder', app.external && 'outside webapps'].filter(Boolean) as string[];
   const linkable = mgr.origin && app.state === 'running';
   const path = linkable ? h('a', { href: mgr.origin + app.path, target: '_blank', rel: 'noopener', class: 'tm-path', title: `Open ${mgr.origin}${app.path}` }, app.path) : h('span', { class: 'tm-path' }, app.path);
@@ -300,7 +326,8 @@ function webappsCard(s: TomcatState): HTMLElement {
   if (!s.manager.configured && s.webapps.length) {
     body.push(h('div', { class: 'tm-note' }, 'Without the Tomcat Manager, Disable and Enable are how a webapp is stopped and started. Set up the Manager in ', settingsLink(), ' to start, stop and reload webapps in place.'));
   }
-  return card('webapps', 'Webapps', dirLabel(s.settings.webappsDir), null, ...body);
+  const tools = s.settings.webappsDir && !s.problems.some((p) => p.key === 'webappsDir') ? revealButton({ from: 'webapps' }, s.settings.webappsDir) : null;
+  return card('webapps', 'Webapps', dirLabel(s.settings.webappsDir), tools, ...body);
 }
 
 function disabledCard(s: TomcatState): HTMLElement {
@@ -311,7 +338,9 @@ function disabledCard(s: TomcatState): HTMLElement {
     body.push(missing('Nothing is disabled. Disable a webapp above to move it here.'));
   }
   body.push(...s.disabled.map((a) => webappRow(s, a)));
-  return card('disabled', 'Disabled webapps', dirLabel(s.settings.disabledDir), null, ...body);
+  // The folder is created by the first Disable, so there is something to open once something is in it.
+  const tools = s.disabled.length ? revealButton({ from: 'disabled' }, s.settings.disabledDir) : null;
+  return card('disabled', 'Disabled webapps', dirLabel(s.settings.disabledDir), tools, ...body);
 }
 
 function warsCard(s: TomcatState): HTMLElement {
@@ -335,6 +364,7 @@ function warsCard(s: TomcatState): HTMLElement {
         h(
           'div',
           { class: 'tm-actions' },
+          revealButton({ file: war.file }, war.file),
           button('Deploy…', () => void openDeploy(war), { primary: war.fresh, disabled: busy || !s.settings.webappsDir, title: s.settings.webappsDir ? undefined : 'Set the webapps folder in Settings › Tomcat' }),
         ),
       ),
@@ -388,11 +418,137 @@ function renderShell(): void {
   render();
 }
 
+// ── Delete dialog ───────────────────────────────────────
+
+function deleteItemLine(item: DeleteItem): HTMLElement {
+  let what: string;
+  if (item.kind === 'war') what = `WAR · ${fmtBytes(item.bytes)}`;
+  else if (item.kind === 'link') what = 'Link: only the link is removed, not what it points to';
+  else what = `Unpacked folder · ${item.partial ? 'at least ' : ''}${item.files.toLocaleString()} file${item.files === 1 ? '' : 's'} · ${fmtBytes(item.bytes)}`;
+  return h('li', {}, h('code', { title: item.path }, item.path), h('span', { class: 'muted' }, what));
+}
+
+/**
+ * Confirms a delete, listing exactly what goes. The hub deletes only what was listed: if the
+ * folder changed meanwhile, it refuses, and the list is loaded again.
+ */
+async function openDelete(app: WebappInfo): Promise<void> {
+  document.querySelector('dialog.tm-delete')?.remove();
+  const from: AppFolder = app.state === 'disabled' ? 'disabled' : 'webapps';
+  const load = () => api<{ items: DeleteItem[] }>(`/api/tomcat/delete?name=${encodeURIComponent(app.name)}&from=${from}`).then((r) => r.items);
+  let items: DeleteItem[];
+  try {
+    items = await load();
+  } catch (err) {
+    T.banner = { kind: 'error', text: (err as Error).message };
+    if (T.open) render();
+    return;
+  }
+
+  const list = h('ul', { class: 'tm-delete-list' });
+  const error = h('div', { class: 'field-error', role: 'alert' });
+  const ok = h('button', { type: 'submit', class: 'btn btn-danger' }, 'Delete') as HTMLButtonElement;
+  const cancel = h('button', { type: 'button', class: 'btn' }, 'Cancel');
+  const show = () => {
+    list.replaceChildren(...items.map(deleteItemLine));
+    ok.disabled = !items.length;
+    if (!items.length) list.append(h('li', { class: 'muted' }, 'Nothing left to delete.'));
+  };
+  show();
+
+  const notes: Child[] = [];
+  const mgr = T.state?.manager;
+  if (from === 'webapps' && app.state === 'running' && mgr?.ok) notes.push(h('p', {}, 'It is running; it is stopped through the Tomcat Manager first.'));
+  else if (from === 'webapps' && !mgr?.ok) {
+    notes.push(h('p', { class: 'muted' }, 'If Tomcat is running, it undeploys the webapp once the WAR is gone. Files it still holds open are retried for a few seconds.'));
+  }
+
+  const form = h(
+    'form',
+    { method: 'dialog' },
+    h('h2', {}, `Delete ${app.name}?`),
+    h('p', {}, `These are deleted from the ${from === 'disabled' ? 'disabled webapps' : 'webapps'} folder:`),
+    list,
+    ...notes,
+    h('p', { class: 'tm-danger-note' }, 'This cannot be undone: the files do not go to the Recycle Bin or Trash.'),
+    error,
+    h('div', { class: 'dialog-actions' }, cancel, ok),
+  );
+  const dialog = h('dialog', { class: 'dialog tm-delete' }, form) as HTMLDialogElement;
+  document.body.append(dialog);
+  cancel.addEventListener('click', () => dialog.close());
+  dialog.addEventListener('close', () => dialog.remove());
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    if (ok.disabled) return;
+    ok.disabled = true;
+    ok.textContent = 'Deleting…';
+    error.textContent = '';
+    const key = `app:${app.name}`;
+    T.busy.add(key);
+    if (T.open) render();
+    try {
+      const { message } = await api('/api/tomcat/delete', { name: app.name, from, items: items.map((i) => i.name) });
+      T.banner = { kind: 'info', text: message };
+      dialog.close();
+    } catch (err) {
+      error.textContent = (err as Error).message;
+      ok.textContent = 'Delete';
+      // Part of it may be gone now: show what is left, which is what Delete removes next time.
+      items = await load().catch(() => items);
+      show();
+    } finally {
+      T.busy.delete(key);
+      await refresh();
+      if (T.open) render();
+    }
+  });
+  dialog.showModal();
+  // The safe choice has the focus, so Enter does not delete.
+  cancel.focus();
+}
+
 // ── Deploy dialog ───────────────────────────────────────
+
+/** "config.yaml and config.js", "a, b and c". */
+function andList(items: string[]): string {
+  return items.length > 1 ? `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}` : (items[0] ?? '');
+}
+
+/**
+ * The "Keep config.yaml and config.js" choice: which files the deploy would carry over from the
+ * copy it replaces, and whether each replaces the build's own or is added.
+ */
+function keepSection(preview: KeepPreview, box: HTMLInputElement): Child[] {
+  const names = andList(preview.patterns);
+  const from = preview.source?.where === 'disabled' ? 'disabled copy' : 'deployed copy';
+  if (!preview.files.length) {
+    return preview.source ? [h('p', { class: 'muted' }, `No ${names.replace(/ and /, ' or ')} in the ${from} to keep.`)] : [];
+  }
+  if (preview.problem) {
+    box.checked = false;
+    box.disabled = true;
+  }
+  const out: Child[] = [h('label', { class: 'check tm-check' }, box, ` Keep ${names} from the ${from}`)];
+  if (preview.problem) out.push(h('p', { class: 'warn' }, preview.problem));
+  out.push(
+    h(
+      'ul',
+      { class: `tm-keep-list${box.checked ? '' : ' off'}` },
+      ...preview.files.map((f) =>
+        h('li', {}, h('code', {}, f.path), h('span', { class: 'muted' }, f.inWar === true ? 'replaces the build’s' : f.inWar === false ? 'added' : '')),
+      ),
+    ),
+  );
+  if (preview.truncated) out.push(h('p', { class: 'muted' }, 'The search stopped early; there may be more.'));
+  if (box.checked) out.push(h('p', { class: 'muted' }, 'Written into the WAR before Tomcat sees it, so the webapp starts with them.'));
+  return out;
+}
 
 /**
  * Asks for the webapp name and explains what the deploy will replace. A disabled webapp of the
  * same name is brought back by the deploy; its old copy is deleted unless the box is unticked.
+ * Local config files in the copy being replaced can be kept (Settings › Tomcat › Files to keep).
  */
 async function openDeploy(war: WarInfo): Promise<void> {
   document.querySelector('dialog.tm-deploy')?.remove();
@@ -406,6 +562,25 @@ async function openDeploy(war: WarInfo): Promise<void> {
   input.value = war.target;
   const removeOld = h('input', { type: 'checkbox' }) as HTMLInputElement;
   removeOld.checked = true;
+  const keepBox = h('input', { type: 'checkbox' }) as HTMLInputElement;
+  keepBox.checked = true;
+  // What can be kept, for the name it was loaded for; reloaded as the name is edited.
+  let keep: { name: string; preview: KeepPreview } | null = null;
+  let keepTimer = 0;
+  let keepSeq = 0;
+  const loadKeep = async (name: string): Promise<void> => {
+    const seq = ++keepSeq;
+    let preview: KeepPreview | null = null;
+    try {
+      preview = await api<KeepPreview>(`/api/tomcat/keep?name=${encodeURIComponent(name)}&file=${encodeURIComponent(war.file)}`);
+    } catch {
+      /* no choice offered; the deploy works without it */
+    }
+    if (seq !== keepSeq) return;
+    keep = preview ? { name, preview } : null;
+    update();
+  };
+  const keepPaths = () => (keep && keepBox.checked && !keep.preview.problem ? keep.preview.files.map((f) => f.path) : []);
   const note = h('div', { class: 'tm-deploy-note' });
   const error = h('div', { class: 'field-error', role: 'alert' });
   const ok = h('button', { type: 'submit', class: 'btn btn-primary' }, 'Deploy') as HTMLButtonElement;
@@ -440,13 +615,22 @@ async function openDeploy(war: WarInfo): Promise<void> {
           h('p', { class: 'muted' }, removeOld.checked ? 'It is an older build of the same webapp.' : `It stays in the disabled folder, but cannot be enabled while ${name} is deployed.`),
         );
       }
+      const kept = !blocked && keep?.name === name ? keepSection(keep.preview, keepBox) : [];
+      if (kept.length) parts.push(h('div', { class: 'tm-keep' }, ...kept));
     }
     note.replaceChildren(...parts.filter((p): p is Node => !!p));
     ok.disabled = blocked;
   };
-  input.addEventListener('input', update);
+  input.addEventListener('input', () => {
+    update();
+    clearTimeout(keepTimer);
+    const name = input.value.trim();
+    if (!nameProblem(name)) keepTimer = window.setTimeout(() => void loadKeep(name), 250);
+  });
   removeOld.addEventListener('change', update);
+  keepBox.addEventListener('change', update);
   update();
+  void loadKeep(war.target);
 
   const form = h(
     'form',
@@ -472,7 +656,18 @@ async function openDeploy(war: WarInfo): Promise<void> {
     const key = `war:${war.file}`;
     T.busy.add(key);
     try {
-      const { message } = await api('/api/tomcat/deploy', { file: war.file, name: input.value.trim(), disabledCopy: removeOld.checked ? 'remove' : 'keep' });
+      const name = input.value.trim();
+      // The name was just edited: find out what there is to keep for it before deploying.
+      if (keep?.name !== name) {
+        clearTimeout(keepTimer);
+        await loadKeep(name);
+        if (keep?.preview.files.length && keepBox.checked) {
+          ok.textContent = 'Deploy';
+          return void update();
+        }
+      }
+      const body = { file: war.file, name, disabledCopy: removeOld.checked ? 'remove' : 'keep', keep: keepPaths() };
+      const { message } = await api('/api/tomcat/deploy', body);
       T.banner = { kind: 'info', text: message };
       dropNotice(war.file);
       dialog.close();
@@ -646,6 +841,7 @@ export function closeTomcat(): void {
   T.open = false;
   clearTimeout(T.timer);
   document.querySelector<HTMLDialogElement>('dialog.tm-deploy')?.close();
+  document.querySelector<HTMLDialogElement>('dialog.tm-delete')?.close();
   root().hidden = true;
   root().replaceChildren();
   document.body.classList.remove('tomcat-open');

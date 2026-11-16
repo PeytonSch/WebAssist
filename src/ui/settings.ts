@@ -854,6 +854,24 @@ function tomcatManagementFields(): HTMLElement[] {
       }),
       h('span', {}, 'When a new or rebuilt WAR appears here, Debug Hub offers to deploy it. Use ', h('code', {}, '*'), ' for several projects, e.g. ', h('code', {}, 'C:/dev/*/target'), '.'),
     ),
+    field(
+      'tomcat.preserveFiles',
+      'Files to keep on deploy',
+      listEditor('tomcat.preserveFiles', {
+        itemLabel: 'File name',
+        addLabel: 'Add file name',
+        placeholder: 'application-local.properties',
+        empty: 'None: a deploy always uses the files in the new WAR.',
+        check: (n) => (/[\\/]/.test(n) ? 'A file name only, without a folder' : null),
+      }),
+      h(
+        'span',
+        {},
+        'File names, ',
+        h('code', {}, '*'),
+        ' allowed. When deploying a WAR, Debug Hub offers to keep these files from the deployed copy (anywhere in the webapp) instead of the ones in the new build, e.g. local settings you edited there.',
+      ),
+    ),
   ];
 }
 

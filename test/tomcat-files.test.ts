@@ -9,6 +9,7 @@ import { startServer } from '../src/server/http';
 import { Hub } from '../src/server/hub';
 import { deleteApp, planDelete } from '../src/server/tomcat/delete';
 import { findKeepSource, findKeptFiles, readKeptFiles } from '../src/server/tomcat/keep';
+import { reveal, revealCommand } from '../src/server/tomcat/reveal';
 import { TomcatService } from '../src/server/tomcat/service';
 import { readEntry, readZipIndex, rewriteZip } from '../src/server/tomcat/zip';
 import type { HubEvent } from '../src/shared/types';
@@ -322,5 +323,50 @@ describe.skipIf(!(() => {
     execFileSync('jar', ['xf', join(dir, 'out.war')], { cwd: join(dir, 'x') });
     expect(readFileSync(join(dir, 'x', 'config.yaml'), 'utf8')).toBe('mine');
     expect(readFileSync(join(dir, 'x', 'WEB-INF', 'web.xml'), 'utf8')).toBe('<web-app/>');
+  });
+});
+
+describe('Show in the file manager', () => {
+  it('builds the command for each platform', () => {
+    expect(revealCommand('C:/dev/my shop/target/shop.war', true, 'win32')).toEqual({ file: 'explorer.exe', args: ['/select,"C:\\dev\\my shop\\target\\shop.war"'], verbatim: true });
+    expect(revealCommand('C:\\tomcat\\webapps', false, 'win32')).toEqual({ file: 'explorer.exe', args: ['"C:\\tomcat\\webapps"'], verbatim: true });
+    expect(revealCommand('/Users/me/shop/target/shop.war', true, 'darwin')).toEqual({ file: 'open', args: ['-R', '/Users/me/shop/target/shop.war'], verbatim: false });
+    expect(revealCommand('/opt/tomcat/webapps', false, 'darwin')).toEqual({ file: 'open', args: ['/opt/tomcat/webapps'], verbatim: false });
+    expect(revealCommand('/home/me/shop/target/shop.war', true, 'linux')).toEqual({ file: 'xdg-open', args: ['/home/me/shop/target'], verbatim: false });
+  });
+
+  it('starts it detached, ignores its exit code and reports a missing program', async () => {
+    const calls: unknown[] = [];
+    const fake = (fail: boolean) => (file: string, args: string[], opts: object) => {
+      calls.push([file, args, opts]);
+      const handlers: Record<string, (e?: Error) => void> = {};
+      setTimeout(() => (fail ? handlers.error?.(new Error('spawn xdg-open ENOENT')) : handlers.spawn?.()), 1);
+      return { once: (ev: string, fn: (e?: Error) => void) => (handlers[ev] = fn), unref: () => void calls.push('unref') };
+    };
+    await reveal('C:/x/a.war', true, { platform: 'win32', spawn: fake(false) });
+    expect(calls).toEqual([['explorer.exe', ['/select,"C:\\x\\a.war"'], { detached: true, stdio: 'ignore', windowsVerbatimArguments: true }], 'unref']);
+    await expect(reveal('/x/a.war', true, { platform: 'linux', spawn: fake(true) })).rejects.toThrow(/Could not start xdg-open: spawn xdg-open ENOENT/);
+  });
+
+  it('only shows WARs the watcher knows and webapps in the configured folders', async () => {
+    tree({ 'build/a.war': 'x', 'webapps/shop.war': 'w', 'webapps/shop/': '', 'webapps/api.war': 'w' });
+    const cfg: Config = structuredClone(DEFAULT_CONFIG);
+    Object.assign(cfg.tomcat, { webappsDir: join(dir, 'webapps'), disabledDir: join(dir, 'disabled'), warWatch: [join(dir, 'build')] });
+    const shown: [string, boolean][] = [];
+    const svc = new TomcatService(cfg, { emit: () => undefined, onWar: () => undefined }, { scriptLogDir: join(dir, 'logs'), reveal: async (p, s) => void shown.push([p, s]) });
+    await svc.warWatcher.tick();
+    await svc.reveal({ file: join(dir, 'build', 'a.war') });
+    await svc.reveal({ name: 'shop', from: 'webapps' });
+    await svc.reveal({ name: 'api', from: 'webapps' });
+    await svc.reveal({ from: 'webapps' });
+    expect(shown).toEqual([
+      [join(dir, 'build', 'a.war'), true],
+      [join(dir, 'webapps', 'shop'), true],
+      [join(dir, 'webapps', 'api.war'), true],
+      [join(dir, 'webapps'), false],
+    ]);
+    await expect(svc.reveal({ file: '/etc/passwd' })).rejects.toMatchObject({ status: 404 });
+    await expect(svc.reveal({ name: '../build', from: 'webapps' })).rejects.toMatchObject({ status: 400 });
+    await expect(svc.reveal({ name: 'nothing', from: 'webapps' })).rejects.toMatchObject({ status: 404 });
   });
 });

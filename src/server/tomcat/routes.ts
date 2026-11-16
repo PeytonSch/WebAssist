@@ -27,6 +27,7 @@ const strings = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is
  *   GET  /api/tomcat/keep?name=&file=        files a deploy could keep from the copy it replaces
  *   GET  /api/tomcat/delete?name=&from=      what Delete would remove (from: webapps | disabled)
  *   POST /api/tomcat/delete                  { name, from, items: [names confirmed] }
+ *   POST /api/tomcat/reveal                  { file } a watched WAR, { name, from } a webapp, { from } a folder
  *   POST /api/tomcat/dismiss                 { file }
  */
 export async function tomcatRoute(
@@ -71,6 +72,12 @@ export async function tomcatRoute(
       const b = await body();
       if (!Array.isArray(b.items)) return json(res, 400, { error: 'Say which items to delete' }), true;
       return json(res, 200, { message: await tomcat.deleteWebapp(String(b.name ?? ''), folder(b.from), strings(b.items)) }), true;
+    }
+    if (path === '/api/tomcat/reveal') {
+      const b = await body();
+      if (typeof b.file === 'string') await tomcat.reveal({ file: b.file });
+      else await tomcat.reveal({ from: folder(b.from), name: typeof b.name === 'string' ? b.name : undefined });
+      return json(res, 200, { ok: true }), true;
     }
     if (path === '/api/tomcat/dismiss') {
       tomcat.dismiss(String((await body()).file ?? ''));

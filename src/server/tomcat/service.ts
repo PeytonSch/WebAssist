@@ -9,6 +9,7 @@ import { isTomcatEntryStart, parseTomcatEntry } from '../parsers/tomcat';
 import { deleteApp, planDelete } from './delete';
 import { findKeepSource, findKeptFiles, readKeptFiles, warHas, writeWarWithKept } from './keep';
 import { appParams, managerCommand, managerList, managerOrigin, type Fetch, type ManagerApp } from './manager';
+import { reveal } from './reveal';
 import { OutputFollower, ScriptRunner } from './scripts';
 import { checkName, contextPath, deployWar, guessTarget, listApps, moveApp, removeApp, TomcatError, type DiskApp } from './webapps';
 import { WarWatcher, type WatchedWar } from './warwatch';
@@ -26,6 +27,8 @@ export interface TomcatServiceOptions {
   scriptLogDir?: string;
   warPollMs?: number;
   fetch?: Fetch;
+  /** Shows a path in the file manager; replaced in tests. */
+  reveal?: (path: string, select: boolean) => Promise<void>;
 }
 
 /** Inside, or the same as, another folder. */
@@ -375,6 +378,37 @@ export class TomcatService {
       `Deleted ${names.join(' and ')} from ${dir}${stopped ? ' (stopped it first)' : ''}.` +
       (from === 'webapps' ? ' Tomcat undeploys it within a few seconds.' : '')
     );
+  }
+
+  // ── Show in the file manager ──────────────────────────
+
+  /**
+   * Shows a watched WAR, a webapp (its folder, else its WAR) or one of the two folders in the
+   * file manager. Only paths the hub knows are accepted, never one taken from the request.
+   */
+  async reveal(target: { file?: string; name?: string; from?: AppFolder }): Promise<void> {
+    let path: string;
+    let select = true;
+    if (target.file !== undefined) {
+      if (!this.watcher.get(target.file)) throw new TomcatError('That WAR is not in a watched folder (or is gone).', 404);
+      path = target.file;
+    } else {
+      const dir = this.folderFor(target.from ?? 'webapps');
+      if (target.name === undefined) {
+        path = dir;
+        select = false;
+      } else {
+        const items = await planDelete(target.name, dir);
+        const item = items.find((i) => i.kind !== 'war') ?? items[0];
+        if (!item) throw new TomcatError(`${target.name} is not in ${dir}`, 404);
+        path = item.path;
+      }
+    }
+    try {
+      await (this.opts.reveal ?? reveal)(path, select);
+    } catch (err) {
+      throw new TomcatError((err as Error).message, 500);
+    }
   }
 
   // ── Kept files ────────────────────────────────────────
