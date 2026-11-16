@@ -24,6 +24,14 @@ interface PatternResult {
   problem: string | null;
 }
 
+interface FolderScan {
+  dir: string;
+  app: PatternResult['files'];
+  access: PatternResult['files'];
+  skipped: number;
+  problem: string | null;
+}
+
 /** Present in the desktop app only (src/desktop/preload.ts). */
 const desktop = (window as unknown as { debugHubDesktop?: DesktopBridge }).debugHubDesktop;
 const isWindows = /Windows/.test(navigator.userAgent);
@@ -198,6 +206,59 @@ function folderInput(path: string, title: string): HTMLElement {
     change(path, p);
   });
   return h('div', { class: 'input-row' }, input, browse);
+}
+
+/** The Tomcat logs folder, with what following it would pick up right now. */
+function logsFolderInput(): HTMLElement {
+  const note = h('div', { class: 'list-note' });
+  let timer = 0;
+  let seq = 0;
+  let last = '';
+  const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? '' : 's'}`;
+  const run = async () => {
+    const body = {
+      dir: String(getPath('tomcat.logsDir') ?? '').trim(),
+      appLogs: getPath('tomcat.appLogs') ?? [],
+      accessLogs: getPath('tomcat.accessLogs') ?? [],
+    };
+    const key = JSON.stringify(body);
+    if (key === last) return;
+    last = key;
+    const mine = ++seq;
+    if (!body.dir) return note.replaceChildren();
+    let r: FolderScan | null;
+    try {
+      r = await (await fetch('/api/config/logs-folder', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: key,
+      })).json();
+    } catch {
+      return;
+    }
+    if (mine !== seq || !r) return;
+    const parts: Child[] = [];
+    const all = [...r.app, ...r.access].sort((a, b) => (a.modified < b.modified ? 1 : -1));
+    if (r.problem) parts.push(h('span', { class: 'pm warn' }, r.problem));
+    else if (!all.length) parts.push(h('span', { class: 'pm warn' }, 'No log files in this folder yet. They are picked up when they appear.'));
+    else {
+      const names = (files: PatternResult['files']) => files.slice(0, 15).map((f) => f.path.split(/[\\/]/).pop()).join('\n');
+      const newest = all[0];
+      parts.push(
+        h('span', { class: 'pm ok', title: `Application logs:\n${names(r.app) || '(none)'}\n\nAccess logs:\n${names(r.access) || '(none)'}` },
+          `${plural(r.app.length, 'application log')} · ${plural(r.access.length, 'access log')} · newest ${newest.path.split(/[\\/]/).pop()} · ${ago(newest.modified)}`),
+      );
+      if (r.skipped) parts.push(h('span', { class: 'pm muted' }, `${plural(r.skipped, 'file')} left out: compressed, lock files, or listed below.`));
+    }
+    if (!/^([a-zA-Z]:)?[\\/]/.test(body.dir)) parts.push(h('span', { class: 'pm muted' }, `Full path: ${r.dir}`));
+    note.replaceChildren(...parts.filter((p): p is Node | string => !!p));
+  };
+  S.derived.push(() => {
+    clearTimeout(timer);
+    timer = window.setTimeout(() => void run(), 350);
+  });
+  void run();
+  return h('div', {}, folderInput('tomcat.logsDir', 'Choose the Tomcat logs folder'), note);
 }
 
 /** Toggle chips for a list drawn from known values; unknown values already in the list are kept. */
@@ -494,6 +555,12 @@ function sections(): SectionDef[] {
       collectors: ['Tomcat logs', 'Tomcat access', 'Tomcat'],
       fields: () => [
         field(
+          'tomcat.logsDir',
+          'Logs folder',
+          logsFolderInput(),
+          h('span', {}, 'Follows every log in the folder, usually ', h('code', {}, 'CATALINA_BASE/logs'), ': access logs by name, the rest as application logs, and new files as they appear. Each event is labelled with its webapp, so you can filter by it on the timeline.'),
+        ),
+        field(
           'tomcat.appLogs',
           'Application logs',
           listEditor('tomcat.appLogs', {
@@ -504,7 +571,7 @@ function sections(): SectionDef[] {
             browse: { kind: 'file', title: 'Choose a Tomcat application log' },
             match: true,
           }),
-          h('span', {}, 'catalina.out, localhost.<date>.log or your app’s own log. Use ', h('code', {}, '*'), ' in the file name to follow date-rotated files.'),
+          h('span', {}, 'For logs outside the logs folder: catalina.out, localhost.<date>.log or your app’s own log. Use ', h('code', {}, '*'), ' in the file name to follow date-rotated files.'),
         ),
         field(
           'tomcat.accessLogs',
@@ -517,7 +584,7 @@ function sections(): SectionDef[] {
             browse: { kind: 'file', title: 'Choose a Tomcat access log' },
             match: true,
           }),
-          'localhost_access_log.<date>.txt. Gives each request’s status and server time.',
+          'For access logs outside the logs folder: localhost_access_log.<date>.txt. Gives each request’s status and server time.',
         ),
         field(
           'tomcat.accessDurationUnit',
@@ -605,7 +672,7 @@ function sections(): SectionDef[] {
       title: 'Advanced',
       desc: 'Rarely needed.',
       fields: () => [
-        field('tail.fromStart', 'Read whole logs at startup', toggle('tail.fromStart', 'Read whole logs at startup'), 'Off: only lines written after Debug Hub starts. On: existing content too, which can be a lot.'),
+        field('tail.fromStart', 'Read whole logs at startup', toggle('tail.fromStart', 'Read whole logs at startup'), 'Off: only lines written after Debug Hub starts. On: existing content too, which can be a lot. From the Tomcat logs folder, only files written in the last day are read.'),
         field('chrome.host', 'Chrome host', textInput('chrome.host', { mono: true }), 'Where Chrome’s debugging port is. Leave at 127.0.0.1 unless Chrome runs elsewhere.'),
         field('tail.pollMs', 'Log poll interval', numberInput('tail.pollMs', { min: 50, max: 10_000, unit: 'ms' }), 'How often log files are checked for new lines.'),
         field('tail.flushMs', 'Multiline wait', numberInput('tail.flushMs', { min: 10, max: 10_000, unit: 'ms' }), 'How long to wait for the rest of a stack trace before showing it.'),

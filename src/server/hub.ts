@@ -1,9 +1,13 @@
+import { dirname, join } from 'node:path';
 import type { CollectorStatus, HubEvent, HubStatus } from '../shared/types';
 import { ChromeCollector } from './collectors/chrome';
 import { LogFileCollector } from './collectors/logfile';
+import { folderSource } from './collectors/logsdir';
+import type { TailSource } from './collectors/tail';
 import type { Config } from './config';
 import { makeEvent } from './normalize';
 import { SessionStore } from './store';
+import { Webapps } from './webapps';
 
 type Listener = {
   onEvent: (ev: HubEvent) => void;
@@ -15,6 +19,7 @@ export class Hub {
   store: SessionStore;
   private chrome: ChromeCollector | null = null;
   private logs: LogFileCollector[] = [];
+  private webapps: Webapps | null = null;
   private listeners = new Set<Listener>();
   private started = false;
 
@@ -29,12 +34,22 @@ export class Hub {
     const onStatus = () => this.notifyStatus();
     this.chrome = cfg.chrome.enabled ? new ChromeCollector(cfg, emit, onStatus) : null;
     this.logs = [];
+    this.webapps = null;
     if (cfg.tomcat.enabled) {
-      if (cfg.tomcat.appLogs.length) {
-        this.logs.push(new LogFileCollector('Tomcat logs', 'tomcat', cfg.tomcat.appLogs, cfg, emit, onStatus));
+      const t = cfg.tomcat;
+      this.webapps = new Webapps(webappDirs(cfg));
+      // The logs folder adds to the files listed by hand; each collector takes its kind of file.
+      const app: (string | TailSource)[] = [...t.appLogs];
+      const access: (string | TailSource)[] = [...t.accessLogs];
+      if (t.logsDir) {
+        app.push(folderSource(t.logsDir, 'app', t.appLogs, t.accessLogs));
+        access.push(folderSource(t.logsDir, 'access', t.appLogs, t.accessLogs));
       }
-      if (cfg.tomcat.accessLogs.length) {
-        this.logs.push(new LogFileCollector('Tomcat access', 'access', cfg.tomcat.accessLogs, cfg, emit, onStatus));
+      if (app.length) {
+        this.logs.push(new LogFileCollector('Tomcat logs', 'tomcat', app, cfg, emit, onStatus, this.webapps));
+      }
+      if (access.length) {
+        this.logs.push(new LogFileCollector('Tomcat access', 'access', access, cfg, emit, onStatus, this.webapps));
       }
     }
     if (cfg.postgres.enabled && cfg.postgres.logs.length) {
@@ -44,6 +59,7 @@ export class Hub {
 
   private async stopCollectors(): Promise<void> {
     this.chrome?.stop();
+    this.webapps?.stop();
     await Promise.all(this.logs.map((l) => l.stop()));
   }
 
@@ -55,6 +71,7 @@ export class Hub {
     this.started = true;
     this.store.start();
     this.chrome?.start();
+    this.webapps?.start();
     this.logs.forEach((l) => l.start());
   }
 
@@ -83,6 +100,7 @@ export class Hub {
     this.build();
     if (this.started) {
       this.chrome?.start();
+      this.webapps?.start();
       this.logs.forEach((l) => l.start());
     }
     this.notifyStatus();
@@ -133,4 +151,15 @@ export class Hub {
       correlation: { header: this.cfg.correlation.header, timeWindowMs: this.cfg.correlation.timeWindowMs },
     };
   }
+}
+
+/**
+ * Folders whose contents name the webapps: webapps and disabled webapps. Without a webapps
+ * folder set, CATALINA_BASE/webapps next to the logs folder is tried, as that is where it
+ * normally is.
+ */
+function webappDirs(cfg: Config): string[] {
+  const t = cfg.tomcat;
+  const webapps = t.webappsDir || (t.logsDir ? join(dirname(t.logsDir), 'webapps') : '');
+  return [webapps, t.disabledDir].filter(Boolean);
 }

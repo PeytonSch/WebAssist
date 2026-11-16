@@ -15,6 +15,8 @@ const ISO = /^\[?(\d{4})-(\d\d)-(\d\d)[T ](\d\d):(\d\d):(\d\d)(?:[.,](\d{1,9}))?
 const JUL = /^\[?(\d\d)-([A-Za-z]{3})-(\d{4}) (\d\d):(\d\d):(\d\d)(?:[.,](\d{1,9}))?\]?/;
 // 14/Nov/2026:08:16:00 -0800 (Common Log Format)
 const CLF = /^\[?(\d\d)\/([A-Za-z]{3})\/(\d{4}):(\d\d):(\d\d):(\d\d)(?: ([+-]\d{4}))?\]?/;
+// Nov 14, 2026 8:16:00 AM (java.util.logging's SimpleFormatter, the JUL default outside Tomcat)
+const JUL_SIMPLE = /^([A-Za-z]{3}) (\d{1,2}), (\d{4}),? (\d{1,2}):(\d\d):(\d\d) ?([AP]M)\b/i;
 // 08:16:00.123 (Logback's default pattern has no date)
 const TIME_ONLY = /^\[?(\d\d):(\d\d):(\d\d)[.,](\d{3})\]?/;
 
@@ -57,6 +59,14 @@ export function parseLeadingTimestamp(line: string, now = new Date()): ParsedTs 
     const mo = MONTHS[m[2].toLowerCase()];
     if (mo === undefined) return null;
     return { ms: build(+m[3], mo, +m[1], +m[4], +m[5], +m[6], 0, m[7]), length: m[0].length };
+  }
+  m = JUL_SIMPLE.exec(line);
+  if (m) {
+    const mo = MONTHS[m[1].toLowerCase()];
+    if (mo === undefined) return null;
+    const h12 = +m[4] % 12;
+    const h = m[7].toUpperCase() === 'PM' ? h12 + 12 : h12;
+    return { ms: build(+m[3], mo, +m[2], h, +m[5], +m[6], 0), length: m[0].length };
   }
   m = TIME_ONLY.exec(line);
   if (m) {
