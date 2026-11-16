@@ -13,6 +13,13 @@ export interface Config {
     captureBodies: boolean;
     /** CDP resource types whose response bodies are captured. */
     bodyResourceTypes: string[];
+    /** Chrome's executable for the Start Chrome button. Empty: find the installed Chrome. */
+    executable: string;
+    /**
+     * The --user-data-dir Chrome is started with. Chrome 136 and later ignore
+     * --remote-debugging-port on the default profile, so it must be a separate folder.
+     */
+    profileDir: string;
   };
   tomcat: {
     enabled: boolean;
@@ -22,6 +29,22 @@ export interface Config {
     accessLogs: string[];
     /** Unit of %D in the access log: ms for Tomcat <= 9, us for Tomcat >= 10. */
     accessDurationUnit: 'ms' | 'us' | 's';
+    /**
+     * A logs folder (CATALINA_BASE/logs) whose every log file is followed: access logs by their
+     * name, everything else as application logs. Empty: off. Adds to appLogs and accessLogs.
+     */
+    logsDir: string;
+    /** CATALINA_BASE/webapps, for the Tomcat page and WAR deploys. Empty: not managed. */
+    webappsDir: string;
+    /** Where disabled webapps are moved, outside webapps so Tomcat does not see them. */
+    disabledDir: string;
+    /** Scripts that start and stop the Tomcat server (.bat/.cmd/.sh or any executable). */
+    startScript: string;
+    stopScript: string;
+    /** Optional Tomcat Manager (text interface) used to start and stop single webapps. */
+    manager: { url: string; username: string; password: string };
+    /** Folders (or `*` patterns) where WARs are built; a new or rebuilt WAR offers a deploy. */
+    warWatch: string[];
   };
   postgres: {
     enabled: boolean;
@@ -54,8 +77,22 @@ export const DEFAULT_CONFIG: Config = {
     port: 9222,
     captureBodies: true,
     bodyResourceTypes: ['XHR', 'Fetch', 'Document'],
+    executable: '',
+    profileDir: 'chrome-profile',
   },
-  tomcat: { enabled: false, appLogs: [], accessLogs: [], accessDurationUnit: 'ms' },
+  tomcat: {
+    enabled: false,
+    appLogs: [],
+    accessLogs: [],
+    accessDurationUnit: 'ms',
+    logsDir: '',
+    webappsDir: '',
+    disabledDir: '',
+    startScript: '',
+    stopScript: '',
+    manager: { url: '', username: '', password: '' },
+    warWatch: [],
+  },
   postgres: { enabled: false, logs: [] },
   tail: { fromStart: false, pollMs: 200, flushMs: 150 },
   redact: { headers: ['authorization', 'proxy-authorization', 'cookie', 'set-cookie'] },
@@ -110,9 +147,19 @@ export function readRawConfig(file: string): Record<string, unknown> {
 /** Makes the paths in a config absolute. Relative paths are relative to the config file. */
 export function resolvePaths(config: Config, base: string): Config {
   const abs = (p: string) => (isAbsolute(p) ? p : resolve(base, p));
+  // Optional paths stay empty when unset.
+  const opt = (p: string) => (p ? abs(p) : p);
   config.sessionsDir = abs(config.sessionsDir);
+  config.chrome.executable = opt(config.chrome.executable);
+  config.chrome.profileDir = opt(config.chrome.profileDir);
   config.tomcat.appLogs = config.tomcat.appLogs.map(abs);
   config.tomcat.accessLogs = config.tomcat.accessLogs.map(abs);
+  config.tomcat.logsDir = opt(config.tomcat.logsDir);
+  config.tomcat.webappsDir = opt(config.tomcat.webappsDir);
+  config.tomcat.disabledDir = opt(config.tomcat.disabledDir);
+  config.tomcat.startScript = opt(config.tomcat.startScript);
+  config.tomcat.stopScript = opt(config.tomcat.stopScript);
+  config.tomcat.warWatch = config.tomcat.warWatch.map(abs);
   config.postgres.logs = config.postgres.logs.map(abs);
   return config;
 }
@@ -179,6 +226,15 @@ export function validateConfig(input: unknown): { config: Config; errors: FieldE
     if (typeof v !== 'boolean') errors.push({ path, message: 'Must be on or off' });
     return v === true;
   };
+  /** Text that may be left empty. */
+  const optText = (path: string, v: unknown, label: string): string => {
+    if (v === undefined || v === null) return '';
+    if (typeof v !== 'string') {
+      errors.push({ path, message: `${label} must be text` });
+      return '';
+    }
+    return v.trim();
+  };
   const text = (path: string, v: unknown, label: string): string => {
     if (typeof v !== 'string') {
       errors.push({ path, message: `${label} must be text` });
@@ -213,6 +269,8 @@ export function validateConfig(input: unknown): { config: Config; errors: FieldE
   config.chrome.port = int('chrome.port', config.chrome.port, 1, 65535, 'Port');
   config.chrome.captureBodies = bool('chrome.captureBodies', config.chrome.captureBodies);
   config.chrome.bodyResourceTypes = list('chrome.bodyResourceTypes', config.chrome.bodyResourceTypes);
+  config.chrome.executable = optText('chrome.executable', config.chrome.executable, 'Chrome program');
+  config.chrome.profileDir = optText('chrome.profileDir', config.chrome.profileDir, 'Chrome profile folder');
   if (config.chrome.port === config.port && /^(127\.0\.0\.1|localhost)$/.test(config.chrome.host)) {
     errors.push({ path: 'chrome.port', message: 'Must differ from Debug Hub’s own port' });
   }
@@ -223,6 +281,25 @@ export function validateConfig(input: unknown): { config: Config; errors: FieldE
   if (!['ms', 'us', 's'].includes(config.tomcat.accessDurationUnit)) {
     errors.push({ path: 'tomcat.accessDurationUnit', message: 'Must be ms, us or s' });
   }
+  config.tomcat.logsDir = optText('tomcat.logsDir', config.tomcat.logsDir, 'Logs folder');
+  config.tomcat.webappsDir = optText('tomcat.webappsDir', config.tomcat.webappsDir, 'Webapps folder');
+  config.tomcat.disabledDir = optText('tomcat.disabledDir', config.tomcat.disabledDir, 'Disabled webapps folder');
+  config.tomcat.startScript = optText('tomcat.startScript', config.tomcat.startScript, 'Start script');
+  config.tomcat.stopScript = optText('tomcat.stopScript', config.tomcat.stopScript, 'Stop script');
+  if (config.tomcat.disabledDir && config.tomcat.disabledDir === config.tomcat.webappsDir) {
+    errors.push({ path: 'tomcat.disabledDir', message: 'Must be a different folder from webapps' });
+  }
+  const mgr = isObj(config.tomcat.manager) ? config.tomcat.manager : { url: '', username: '', password: '' };
+  config.tomcat.manager = {
+    url: optText('tomcat.manager.url', mgr.url, 'Manager URL').replace(/\/+$/, ''),
+    username: optText('tomcat.manager.username', mgr.username, 'User name'),
+    // Not trimmed: a password may end in a space.
+    password: typeof mgr.password === 'string' ? mgr.password : '',
+  };
+  if (config.tomcat.manager.url && !/^https?:\/\/[^/\s]+/.test(config.tomcat.manager.url)) {
+    errors.push({ path: 'tomcat.manager.url', message: 'Must start with http:// or https://' });
+  }
+  config.tomcat.warWatch = list('tomcat.warWatch', config.tomcat.warWatch);
 
   config.postgres.enabled = bool('postgres.enabled', config.postgres.enabled);
   config.postgres.logs = list('postgres.logs', config.postgres.logs);
