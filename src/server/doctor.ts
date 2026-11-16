@@ -2,6 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { homedir, platform, release } from 'node:os';
 import { join } from 'node:path';
+import { findChrome, thisMachine } from './chrome-launch';
 import type { Config } from './config';
 
 /**
@@ -129,8 +130,17 @@ export async function runDoctor(cfg: Config, projectDir: string | null): Promise
     }
     if (port) ports.add(port);
     md.push(`- Chrome pid ${p.pid}: debugging port ${port ?? 'not set'}; profile ${dataDir ? `\`${dataDir}\` (dedicated)` : 'default (the everyday profile)'}`);
-    if (!dataDir && portFlag) todo.push('Chrome is running on the default profile. Point the IntelliJ run configuration at a dedicated `--user-data-dir`.');
+    if (!dataDir && portFlag) {
+      // Chrome 136 and later refuse the debugging port on the default profile, without an error
+      // anyone sees: the browser opens normally and the port simply stays closed.
+      md.push('  - **Google Chrome 136 and later keep the debugging port closed here**: the port needs a `--user-data-dir` of its own. (Chromium and Chrome for Testing do not enforce this.)');
+      todo.push(
+        `Chrome pid ${p.pid} was started with \`--remote-debugging-port\` but no \`--user-data-dir\`, so it runs on the everyday profile, where Chrome 136 and later keep the debugging port closed. Close Chrome and use Start Chrome in Debug Hub, or add a dedicated \`--user-data-dir\` to the IntelliJ run configuration.`,
+      );
+    }
   }
+  const where = findChrome(cfg.chrome.executable, thisMachine());
+  md.push(`- Chrome program for Start Chrome: ${where.path ? `\`${where.path}\`${where.source === 'settings' ? ' (from settings)' : ''}` : (where.problem ?? 'not found')}`);
   let cdpOk = false;
   for (const port of ports) {
     const r = await probeCdp(port);
@@ -147,7 +157,7 @@ export async function runDoctor(cfg: Config, projectDir: string | null): Promise
     todo.push(
       usesPipe
         ? 'Chrome was started with `--remote-debugging-pipe`, which only its parent process can use. Add `--remote-debugging-port=9222` to the browser settings in IntelliJ (Settings > Tools > Web Browsers > Chrome > Edit > Command-line options).'
-        : 'No CDP endpoint answered. Add `--remote-debugging-port=9222` to the Chrome command-line options in IntelliJ, restart the debug session and re-run.',
+        : `No CDP endpoint answered. Use Start Chrome in Debug Hub, or add \`--remote-debugging-port=${cfg.chrome.port}\` and a dedicated \`--user-data-dir\` to the Chrome command-line options in IntelliJ, restart the debug session and re-run.`,
     );
   }
   md.push('');

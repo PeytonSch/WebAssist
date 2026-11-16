@@ -3,6 +3,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { dirname, extname, isAbsolute, join, normalize, resolve, sep } from 'node:path';
 import { WebSocketServer, type WebSocket } from 'ws';
 import type { HubEvent, ServerMessage } from '../shared/types';
+import { chromeSetup, startChrome } from './chrome-launch';
 import { matchPattern } from './collectors/tail';
 import { editableConfig, resolvePaths, saveConfig, validateConfig } from './config';
 import type { Hub } from './hub';
@@ -119,6 +120,17 @@ export function startServer(hub: Hub, uiDir: string, opts: ServerOptions): Promi
           }),
         );
         return json(res, 200, results);
+      }
+
+      if (path === '/api/chrome/setup' && req.method === 'GET') {
+        // The settings screen passes its unsaved values; without them, the running settings.
+        const q = url.searchParams;
+        const exe = q.has('executable') ? q.get('executable')! : hub.cfg.chrome.executable;
+        const profile = q.has('profileDir') ? q.get('profileDir')! : hub.cfg.chrome.profileDir;
+        return json(res, 200, chromeSetup(exe, profile, configDir));
+      }
+      if (path === '/api/chrome/launch' && req.method === 'POST') {
+        return json(res, 200, await startChrome(hub.cfg, configDir));
       }
 
       if (path === '/api/markers' && req.method === 'POST') {
