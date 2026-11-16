@@ -93,6 +93,7 @@ written with forward slashes or pasted as they are (`C:\Users\me\logs`).
 | `tomcat.startChrome` | `false` | Start Tomcat also starts Chrome with its debugging port, last. |
 | `tomcat.manager` | | Optional Tomcat Manager login: `{ "url": "http://localhost:8080/manager/text", "username": …, "password": … }`. The password is stored as plain text. |
 | `tomcat.warWatch` | `[]` | Folders where WARs are built; `*` matches any folder name, e.g. `C:/dev/*/target`. |
+| `tomcat.preserveFiles` | `["config.yaml", "config.js", "log4j2.xml"]` | File names (`*` allowed) a deploy can keep from the deployed copy instead of the new build's. |
 | `postgres.enabled`, `postgres.logs` | `false`, `[]` | Postgres server logs. |
 | `tail.fromStart` | `false` | Read existing log content at startup, not only new lines. |
 | `redact.headers` | `authorization, proxy-authorization, cookie, set-cookie` | Header values replaced with `[redacted]` before writing. |
@@ -205,6 +206,13 @@ Hub. Set it up under Settings → Tomcat → Management; the page says what is m
   ever overwritten. On Windows, a running Tomcat can keep files locked; the move is then undone
   and the message says to stop the webapp or the server first. With the Manager set up, a
   running webapp is stopped before it is moved.
+- **Delete.** Deletes a webapp's WAR and unpacked folder for good, from `webapps` or the
+  disabled folder, after a confirmation listing every path with its size. The WAR goes first
+  (otherwise Tomcat would unpack it again). Links inside the webapp are removed, never followed.
+  With the Manager set up, a running webapp is stopped first; files a running Tomcat still holds
+  open are retried for a few seconds, then the message says exactly what was deleted and what is
+  left. The Manager's `undeploy` is not used: it follows links inside the webapp folder and also
+  deletes the webapp's context file in `conf/Catalina`.
 - **WAR builds.** WARs in the watch folders are listed with when they were built. When a WAR
   is built or rebuilt while Debug Hub runs, a notice appears on every screen (and a desktop
   notification when the window is in the background, if allowed) once the file has stopped
@@ -215,7 +223,14 @@ Hub. Set it up under Settings → Tomcat → Management; the page says what is m
   (`shop-1.4.0-SNAPSHOT.war` deploys as `shop`), and can be changed. Deploying over a disabled
   webapp brings it back with the new build and deletes the old disabled copy, unless you untick
   that. A webapp deployed as a folder without a WAR must be disabled before a WAR can replace
-  it.
+  it. **Show in Explorer** (Finder on macOS, the folder elsewhere) opens where a WAR was built.
+- **Keeping local files.** If the copy being replaced (its unpacked folder, else its WAR, else
+  its disabled copy) has files named in `tomcat.preserveFiles` anywhere in it (not under
+  `WEB-INF/lib` or `node_modules`), the deploy dialog offers to keep them, ticked by default,
+  listing each path. They are written into the new WAR before Tomcat sees it (replacing the
+  build's file or added), so the webapp starts with your config. The build itself is not
+  changed. ZIP64 (over 4 GB) and encrypted WARs cannot be rewritten; deploy those without
+  keeping files.
 
 ## Sessions and privacy
 

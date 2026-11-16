@@ -1,18 +1,22 @@
 import { access } from 'node:fs/promises';
 import { basename, isAbsolute, relative } from 'node:path';
 import type { HubEvent, Level } from '../../shared/types';
-import type { CommandRun, ScriptKind, ScriptRun, StartSequence, TomcatState, WarInfo, WebappAction, WebappInfo } from '../../shared/tomcat';
+import type { AppFolder, CommandRun, KeepPreview, ScriptKind, ScriptRun, StartSequence, TomcatState, WarInfo, WebappAction, WebappInfo } from '../../shared/tomcat';
 import { EntryGrouper } from '../collectors/logfile';
 import type { Config } from '../config';
 import { makeEvent } from '../normalize';
 import { isTomcatEntryStart, parseTomcatEntry } from '../parsers/tomcat';
+import { deleteApp, planDelete } from './delete';
+import { findKeepSource, findKeptFiles, readKeptFiles, warHas, writeWarWithKept } from './keep';
 import { appParams, managerCommand, managerList, managerOrigin, type Fetch, type ManagerApp } from './manager';
 import { CommandRunner } from './commands';
 import { launchPlan, thisLaunchMachine, type LaunchMachine } from './launch';
+import { reveal } from './reveal';
 import { OutputFollower, ScriptRunner } from './scripts';
 import { Sequence } from './sequence';
 import { checkName, contextPath, deployWar, guessTarget, listApps, moveApp, removeApp, TomcatError, type DiskApp } from './webapps';
 import { WarWatcher, type WatchedWar } from './warwatch';
+import { ZipError, type NewFile, type RewriteResult } from './zip';
 
 export interface TomcatHooks {
   /** Puts an event on the timeline. */
@@ -32,6 +36,8 @@ export interface TomcatServiceOptions {
   machine?: LaunchMachine;
   warPollMs?: number;
   fetch?: Fetch;
+  /** Shows a path in the file manager; replaced in tests. */
+  reveal?: (path: string, select: boolean) => Promise<void>;
 }
 
 /** What Start Chrome answers; set by the HTTP server, which knows the settings file's folder. */
@@ -50,6 +56,12 @@ function lineLevel(line: string): Level {
 function within(child: string, parent: string): boolean {
   const rel = relative(parent, child);
   return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
+}
+
+/** "config.yaml (replaced) and WEB-INF/classes/config.js (added)". */
+function keptSummary(r: RewriteResult): string {
+  const parts = [...r.replaced.map((p) => `${p} (replaced)`), ...r.added.map((p) => `${p} (added)`)];
+  return parts.length > 1 ? `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}` : parts[0];
 }
 
 /**
@@ -369,6 +381,156 @@ export class TomcatService {
     return `Enabled ${name}: moved ${moved.join(' and ')} back to webapps. Tomcat deploys it within a few seconds.`;
   }
 
+  // ── Delete ────────────────────────────────────────────
+
+  private folderFor(from: AppFolder): string {
+    const { webappsDir, disabledDir } = this.needFolders(from === 'disabled');
+    return from === 'disabled' ? disabledDir : webappsDir;
+  }
+
+  /** The Manager's own webapp: deleting it would cut off this page's control of Tomcat. */
+  private isManagerApp(name: string): boolean {
+    try {
+      const first = new URL(this.cfg.tomcat.manager.url).pathname.split('/')[1];
+      return !!first && contextPath(name) === `/${first}`;
+    } catch {
+      return false;
+    }
+  }
+
+  /** What Delete would remove, for the confirmation. */
+  async deletePlan(name: string, from: AppFolder) {
+    return planDelete(name, this.folderFor(from));
+  }
+
+  /**
+   * Deletes a webapp's WAR and folder for good. `expected` is what the user confirmed; if the
+   * folder holds something else by now, nothing is deleted.
+   *
+   * A running webapp is stopped through the Manager first, when there is one, so Tomcat lets go
+   * of its files (on Windows, open files cannot be deleted). The Manager's own undeploy command
+   * would also delete the files, but it is not used for that: it follows symbolic links inside
+   * the webapp folder and deletes what they point to, it also deletes the webapp's context file
+   * in conf/Catalina/<host>, which may be hand-written and is not in the confirmation, and it
+   * does not say what is left when a delete fails. Deleting here never leaves the folder.
+   */
+  async deleteWebapp(name: string, from: AppFolder, expected?: string[]): Promise<string> {
+    const problem = checkName(name);
+    if (problem) throw new TomcatError(`Not a webapp name: ${problem}`);
+    const dir = this.folderFor(from);
+    if (from === 'webapps' && this.isManagerApp(name)) {
+      throw new TomcatError(`${name} is the Tomcat Manager that Debug Hub uses; it cannot be deleted from here.`);
+    }
+    const path = contextPath(name);
+    const mgr = this.cfg.tomcat.manager;
+    let stopped = false;
+    if (from === 'webapps' && mgr.url) {
+      try {
+        const app = (await managerList(mgr, this.opts.fetch)).find((m) => m.name === name);
+        if (app?.state === 'running') {
+          await managerCommand(mgr, 'stop', appParams(name), this.opts.fetch);
+          stopped = true;
+        }
+      } catch {
+        /* Tomcat not running, or no Manager access: deleting is still the point. */
+      }
+    }
+    let deleted;
+    try {
+      // In webapps, a running Tomcat undeploys the webapp once its WAR is gone, releasing its files.
+      ({ deleted } = await deleteApp(name, dir, { expected, tomcatWatches: from === 'webapps' }));
+    } catch (err: any) {
+      if (stopped && err instanceof Error) err.message += ` ${name} was stopped first and is still stopped.`;
+      if (err?.deleted?.length) this.note('warn', `Partly deleted webapp ${path} from ${from}: ${err.message}`, { webapp: name, action: 'delete', from });
+      throw err;
+    }
+    const names = deleted.map((d) => d.name);
+    this.note('info', `Deleted webapp ${path} from ${from}: ${names.join(' and ')}`, { webapp: name, action: 'delete', from, paths: deleted.map((d) => d.path) });
+    return (
+      `Deleted ${names.join(' and ')} from ${dir}${stopped ? ' (stopped it first)' : ''}.` +
+      (from === 'webapps' ? ' Tomcat undeploys it within a few seconds.' : '')
+    );
+  }
+
+  // ── Show in the file manager ──────────────────────────
+
+  /**
+   * Shows a watched WAR, a webapp (its folder, else its WAR) or one of the two folders in the
+   * file manager. Only paths the hub knows are accepted, never one taken from the request.
+   */
+  async reveal(target: { file?: string; name?: string; from?: AppFolder }): Promise<void> {
+    let path: string;
+    let select = true;
+    if (target.file !== undefined) {
+      if (!this.watcher.get(target.file)) throw new TomcatError('That WAR is not in a watched folder (or is gone).', 404);
+      path = target.file;
+    } else {
+      const dir = this.folderFor(target.from ?? 'webapps');
+      if (target.name === undefined) {
+        path = dir;
+        select = false;
+      } else {
+        const items = await planDelete(target.name, dir);
+        const item = items.find((i) => i.kind !== 'war') ?? items[0];
+        if (!item) throw new TomcatError(`${target.name} is not in ${dir}`, 404);
+        path = item.path;
+      }
+    }
+    try {
+      await (this.opts.reveal ?? reveal)(path, select);
+    } catch (err) {
+      throw new TomcatError((err as Error).message, 500);
+    }
+  }
+
+  // ── Kept files ────────────────────────────────────────
+
+  /** The disabled folder, when it can be used. */
+  private usableDisabledDir(): string {
+    return this.disabledProblem() ? '' : this.cfg.tomcat.disabledDir;
+  }
+
+  /**
+   * Which files a deploy of `file` as `name` could keep from the copy it replaces, and whether
+   * the new WAR has each already (replaced) or not (added).
+   */
+  async keepPreview(name: string, file?: string): Promise<KeepPreview> {
+    const t = this.cfg.tomcat;
+    const preview: KeepPreview = { patterns: t.preserveFiles, source: null, files: [], truncated: false, problem: null };
+    if (!t.preserveFiles.length || !t.webappsDir || checkName(name)) return preview;
+    preview.source = await findKeepSource(name, t.webappsDir, this.usableDisabledDir());
+    if (!preview.source) return preview;
+    try {
+      const found = await findKeptFiles(preview.source, t.preserveFiles);
+      preview.files = found.files.map((f) => ({ ...f, inWar: null }));
+      preview.truncated = found.truncated;
+    } catch (err) {
+      preview.problem = `Cannot read ${preview.source.path}: ${(err as Error).message}`;
+      return preview;
+    }
+    if (file && preview.files.length && this.watcher.get(file)) {
+      try {
+        const has = await warHas(file, preview.files.map((f) => f.path));
+        preview.files = preview.files.map((f) => ({ ...f, inWar: has.has(f.path) }));
+      } catch (err) {
+        preview.problem = `Cannot keep files in ${basename(file)}: ${(err as Error).message}`;
+      }
+    }
+    return preview;
+  }
+
+  /** Reads the files to keep before the deploy replaces (and Tomcat deletes) the copy they are in. */
+  private async filesToKeep(name: string, webappsDir: string, keep: string[]): Promise<NewFile[]> {
+    const source = await findKeepSource(name, webappsDir, this.usableDisabledDir());
+    if (!source) throw new TomcatError(`There is no deployed copy of ${name} to keep files from any more. Open the deploy dialog again.`, 409);
+    try {
+      return await readKeptFiles(source, this.cfg.tomcat.preserveFiles, keep);
+    } catch (err) {
+      if (err instanceof ZipError) throw new TomcatError(`Cannot read the files to keep from ${source.path}: ${err.message} Deploy without keeping files.`, 422);
+      throw err;
+    }
+  }
+
   private plan() {
     return launchPlan(this.cfg.tomcat, this.opts.machine ?? thisLaunchMachine());
   }
@@ -465,23 +627,31 @@ export class TomcatService {
    * disabled copy: otherwise the same webapp would be listed as both deployed and disabled, and
    * enabling the old copy later could not work while the new one is deployed.
    */
-  async deploy(file: string, name: string, disabledCopy: 'remove' | 'keep' = 'remove'): Promise<string> {
+  async deploy(file: string, name: string, disabledCopy: 'remove' | 'keep' = 'remove', keep: string[] = []): Promise<string> {
     if (!this.watcher.get(file)) throw new TomcatError('That WAR is not in a watched folder (or is gone).', 404);
     const { webappsDir, disabledDir } = this.needFolders(false);
-    const { replaced } = await deployWar(file, webappsDir, name);
+    const problem = checkName(name);
+    if (problem) throw new TomcatError(problem);
+    const kept = keep.length ? await this.filesToKeep(name, webappsDir, keep) : [];
+    let rewrite = null as RewriteResult | null;
+    const write = kept.length ? async (tmp: string) => void (rewrite = await writeWarWithKept(file, tmp, kept)) : undefined;
+    const { replaced } = await deployWar(file, webappsDir, name, write);
     let removed = false;
     if (disabledDir && disabledCopy === 'remove' && !this.disabledProblem()) {
       removed = await removeApp(name, disabledDir);
     }
     this.watcher.settle(file);
     const path = contextPath(name);
-    this.note('info', `Deployed ${basename(file)} as ${name}.war (${path})${replaced ? ', replacing the previous build' : ''}`, {
+    const keptNote = rewrite ? ` Kept ${keptSummary(rewrite)} from the deployed copy.` : '';
+    this.note('info', `Deployed ${basename(file)} as ${name}.war (${path})${replaced ? ', replacing the previous build' : ''}.${keptNote}`, {
       webapp: name,
       action: 'deploy',
       war: file,
+      ...(rewrite ? { kept: [...rewrite.replaced, ...rewrite.added] } : {}),
     });
     return (
       `Deployed ${basename(file)} as ${name}.war. Tomcat ${replaced ? 'redeploys' : 'deploys'} ${path} within a few seconds.` +
+      keptNote +
       (removed ? ' The old disabled copy was removed.' : '')
     );
   }
