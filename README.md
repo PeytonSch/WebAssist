@@ -41,15 +41,15 @@ Requires Node.js 18 or later.
 npm install
 ```
 
-**Try it without your stack.** Three terminals:
+**Try it without your stack.** Two terminals:
 
 ```
 npm run demo                 # a stand-in app on :4010 that writes Tomcat- and Postgres-format logs
-chrome --remote-debugging-port=9222 --user-data-dir=/tmp/dh-profile http://localhost:4010
 npm run demo:hub             # the hub on http://localhost:4000
 ```
 
-Open http://localhost:4000 in any browser and click the buttons in the demo app.
+Open http://localhost:4000, click **Start Chrome**, open http://localhost:4010 in the Chrome
+window that appears and click the buttons in the demo app.
 
 **Use it with your stack.**
 
@@ -74,6 +74,8 @@ written with forward slashes or pasted as they are (`C:\Users\me\logs`).
 | `port` | `4000` | UI port. Also `--port`. |
 | `sessionsDir` | `sessions` | Where session files are written. |
 | `chrome.port` | `9222` | Chrome's remote debugging port. Also `--cdp-port`. |
+| `chrome.profileDir` | `chrome-profile` | The `--user-data-dir` that **Start Chrome** uses. Must not be Chrome's everyday profile (see below). |
+| `chrome.executable` | empty | Chrome for **Start Chrome**. Empty: the usual install locations (Program Files and `%LOCALAPPDATA%` on Windows, `/Applications` and `~/Applications` on macOS, `google-chrome`/`chromium` on `PATH` on Linux). |
 | `chrome.captureBodies` | `true` | Capture text and JSON response bodies. |
 | `chrome.bodyResourceTypes` | `XHR, Fetch, Document` | Resource types whose bodies are captured. |
 | `tomcat.enabled` | `false` | Turn on the Tomcat collectors. |
@@ -90,11 +92,22 @@ written with forward slashes or pasted as they are (`C:\Users\me\logs`).
 
 ## Collectors
 
-**Chrome.** Attaches to the running browser over CDP; it never launches one, and it does not
-enable the Debugger domain, so it runs alongside IntelliJ's JavaScript debugger. Records
-console messages, uncaught exceptions, and requests with status, timing, headers and bodies.
-New tabs are attached as they open. If Chrome restarts, the hub reconnects within about a
-second. The hub's own UI tab is skipped.
+**Chrome.** Attaches to a running browser over CDP, and does not enable the Debugger domain,
+so it runs alongside IntelliJ's JavaScript debugger. Records console messages, uncaught
+exceptions, and requests with status, timing, headers and bodies. New tabs are attached as they
+open. If Chrome restarts, the hub reconnects within about a second. The hub's own UI tab is
+skipped.
+
+Chrome has to be started with a debugging port **and a profile folder of its own**: Chrome 136
+and later silently keep the port closed on the everyday profile, and a Chrome that is already
+running on the profile you start takes the new window over and drops the flags. The easiest
+way is the **Start Chrome** button (in the timeline while Chrome is not connected, on the
+Chrome status pill in the top bar, and under Settings > Browser). It starts Chrome directly,
+with `--remote-debugging-port=<chrome.port> --user-data-dir=<chrome.profileDir>`, does nothing
+if Chrome already answers on the port, and says what went wrong if the port does not open.
+Settings > Browser also shows the same command to run yourself (on Windows, for Command Prompt
+and for PowerShell) with every path written out, so it can go into a shortcut or an IntelliJ
+browser configuration.
 
 **Tomcat application logs.** Follows the files, including date-rotated ones and truncation.
 A line without a leading timestamp is treated as a continuation, so a stack trace is one
@@ -146,7 +159,8 @@ npm run app           # the desktop app, from source
 
 | Symptom | Cause and fix |
 |---|---|
-| Chrome stays "waiting" | Nothing is listening on `chrome.port`. Check `curl http://localhost:9222/json`. IntelliJ may start Chrome with `--remote-debugging-pipe` or a random port; `npm run doctor` says which, and how to add `--remote-debugging-port=9222`. |
+| Chrome stays "waiting" | Hover the Chrome pill for the reason. "Nothing is listening": Chrome was started without the port, or on its everyday profile (Chrome 136 and later ignore the port there; `chrome://version` then shows no `--user-data-dir` and a Profile Path under `Google\Chrome\User Data`), or a Chrome already running on that profile swallowed the flags. Close Chrome on that profile and use **Start Chrome**. "Something other than Chrome": another program has the port; pick another `chrome.port`. IntelliJ may start Chrome with `--remote-debugging-pipe` or a random port; `npm run doctor` says which. |
+| The copied command does nothing in PowerShell | PowerShell needs `&` before a quoted program path and does not expand `%VARIABLES%`. Use the PowerShell line under Settings > Browser. |
 | Tomcat shows "No files match" | The paths are wrong, or Tomcat has not written a log yet. IntelliJ's `CATALINA_BASE` is not the Tomcat install directory; `doctor` prints the real one (on Windows, usually under `%LOCALAPPDATA%\JetBrains\<IDE version>\tomcat\`). |
 | No application log lines | IntelliJ shows Tomcat's stdout in its console and usually does not write `catalina.out`. Log to a file. |
 | Access log durations are 1000 times too large | Tomcat 10 or later: set `tomcat.accessDurationUnit` to `"us"`. |

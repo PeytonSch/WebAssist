@@ -27,6 +27,10 @@ npm run doctor -- --project /path/to/the/app --out docs/environment.md
 - **Chrome debugging port.** If IntelliJ starts Chrome with `--remote-debugging-pipe` or a
   random port, add `--remote-debugging-port=9222` under Settings > Tools > Web Browsers >
   Chrome > Edit > Command-line options. `doctor` reports which case applies.
+- **Chrome profile.** Chrome 136 and later keep the debugging port closed unless Chrome also
+  gets a `--user-data-dir` other than the everyday profile, and a Chrome already running on a
+  profile ignores the flags of a new launch on it. `doctor` flags a Chrome that has the port
+  but no `--user-data-dir`. The Start Chrome button in Debug Hub starts it correctly.
 - **Tomcat application logs.** IntelliJ normally shows Tomcat's stdout in its own console
   and does not write `catalina.out`. The hub can only tail files, so application logging has
   to reach a file (`catalina.<date>.log`, `localhost.<date>.log`, or the app's own log file).
