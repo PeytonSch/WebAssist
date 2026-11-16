@@ -58,7 +58,8 @@ export interface Config {
     startChrome: boolean;
     /**
      * File names kept from the deployed copy of a webapp when a new WAR replaces it, e.g. local
-     * settings the build would overwrite. `*` allowed. Offered as a choice when deploying.
+     * settings and log configuration the build would overwrite. `*` allowed. Offered as a choice
+     * when deploying.
      */
     preserveFiles: string[];
   };
@@ -123,7 +124,7 @@ export const DEFAULT_CONFIG: Config = {
     javaHome: '',
     startCommands: [],
     startChrome: false,
-    preserveFiles: ['config.yaml', 'config.js'],
+    preserveFiles: ['config.yaml', 'config.js', 'log4j2.xml'],
   },
   postgres: { enabled: false, logs: [] },
   tail: { fromStart: false, pollMs: 200, flushMs: 150 },
