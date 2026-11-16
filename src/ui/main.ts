@@ -3,6 +3,7 @@ import type { HubEvent, HubStatus, Level, ServerMessage, SessionInfo } from '../
 import { $, fmtBytes, h, type Child } from './dom';
 import { initSettings, openSettings, settingsOpen, updateSettingsStatus } from './settings';
 import { initTitlebar } from './titlebar';
+import { closeTomcat, initTomcat, onWarNotice, openTomcat, syncWarNotices, tomcatOpen } from './tomcat';
 
 // Everything captured is untrusted text. It is only ever placed in the DOM through
 // textContent (see `h`), never as HTML.
@@ -915,10 +916,12 @@ function connect(): void {
     renderStatus();
     // Pick up anything recorded while the socket was down.
     if (state.mode === 'live' && state.session) void openSession(state.session);
+    void syncWarNotices();
   };
   ws.onmessage = (e) => {
     const msg = JSON.parse(e.data) as ServerMessage;
     if (msg.type === 'status') onStatus(msg.status);
+    else if (msg.type === 'war') onWarNotice(msg.war);
     else if (state.mode === 'live' && msg.session === state.session) ingest(msg.events);
   };
   ws.onclose = () => {
@@ -984,12 +987,20 @@ function init(): void {
   $('btn-help').onclick = () => help.showModal();
   $('help-close').onclick = () => help.close();
 
-  initSettings({ onToggle: () => renderList() });
+  // One full-window screen at a time: opening Settings (also from the menu or a link) closes Tomcat.
+  initSettings({
+    onToggle: (open) => {
+      if (open) closeTomcat();
+      renderList();
+    },
+  });
   $('btn-settings').onclick = () => openSettings();
+  initTomcat({ onToggle: () => renderList() });
+  $('btn-tomcat').onclick = () => openTomcat();
 
   document.addEventListener('keydown', (e) => {
-    // The settings screen has its own keys.
-    if (settingsOpen()) return;
+    // The settings and Tomcat screens have their own keys.
+    if (settingsOpen() || tomcatOpen()) return;
     const target = e.target as HTMLElement;
     const typing = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT';
     if (e.key === 'Escape') {

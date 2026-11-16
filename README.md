@@ -80,6 +80,11 @@ written with forward slashes or pasted as they are (`C:\Users\me\logs`).
 | `tomcat.appLogs` | `[]` | Application logs. `*` is allowed in the file name. |
 | `tomcat.accessLogs` | `[]` | Access logs. |
 | `tomcat.accessDurationUnit` | `ms` | Unit of `%D`: `ms` up to Tomcat 9, `us` from Tomcat 10. |
+| `tomcat.webappsDir` | | Tomcat's `webapps` folder, for the Tomcat page and WAR deploys. |
+| `tomcat.disabledDir` | | Where disabled webapps are moved. Must be outside `webappsDir`. |
+| `tomcat.startScript`, `tomcat.stopScript` | | Scripts run by Start Tomcat and Stop Tomcat (`.bat`, `.cmd`, `.ps1`, `.sh` or any program). |
+| `tomcat.manager` | | Optional Tomcat Manager login: `{ "url": "http://localhost:8080/manager/text", "username": …, "password": … }`. The password is stored as plain text. |
+| `tomcat.warWatch` | `[]` | Folders where WARs are built; `*` matches any folder name, e.g. `C:/dev/*/target`. |
 | `postgres.enabled`, `postgres.logs` | `false`, `[]` | Postgres server logs. |
 | `tail.fromStart` | `false` | Read existing log content at startup, not only new lines. |
 | `redact.headers` | `authorization, proxy-authorization, cookie, set-cookie` | Header values replaced with `[redacted]` before writing. |
@@ -120,6 +125,36 @@ into the error above them.
 - The session menu switches between the live session and saved ones.
 - Shortcuts: `/` search, `M` marker, `J`/`K` or arrows to move, `E` errors only, `F` follow,
   `O` newest/oldest first, `R` reset filters, `Esc` close, `?` help.
+
+## Tomcat page and WAR deploys
+
+The **Tomcat** button in the top bar (or `#tomcat`) opens a page for running Tomcat from Debug
+Hub. Set it up under Settings → Tomcat → Management; the page says what is missing.
+
+- **Server.** Start Tomcat and Stop Tomcat run your own scripts, in the script's folder. The
+  last run's output and exit code are shown, and the output also goes on the timeline as
+  Tomcat events. Debug Hub does not wait for the script: one that keeps Tomcat in the
+  foreground shows as still running, and keeps running when Debug Hub closes.
+- **Webapps.** Everything in `webapps`, as WAR and/or unpacked folder. With the Tomcat Manager
+  set up (a user with the `manager-script` role in `conf/tomcat-users.xml`), each webapp shows
+  whether it is running and can be started, stopped and reloaded in place. Without it, a
+  webapp is either deployed or disabled.
+- **Disable / Enable.** Disable moves a webapp's WAR and unpacked folder out of `webapps` into
+  the disabled folder, so Tomcat undeploys it and forgets it; Enable moves it back. Nothing is
+  ever overwritten. On Windows, a running Tomcat can keep files locked; the move is then undone
+  and the message says to stop the webapp or the server first. With the Manager set up, a
+  running webapp is stopped before it is moved.
+- **WAR builds.** WARs in the watch folders are listed with when they were built. When a WAR
+  is built or rebuilt while Debug Hub runs, a notice appears on every screen (and a desktop
+  notification when the window is in the background, if allowed) once the file has stopped
+  changing and is a complete archive. **Deploy** copies it into `webapps` under a temporary
+  name and renames it to `<name>.war` when complete, so Tomcat never sees half a file; Tomcat
+  (with `autoDeploy`, its default) deploys or redeploys it within seconds. The name is guessed
+  from the file name, matching a deployed or disabled webapp, without a Maven version
+  (`shop-1.4.0-SNAPSHOT.war` deploys as `shop`), and can be changed. Deploying over a disabled
+  webapp brings it back with the new build and deletes the old disabled copy, unless you untick
+  that. A webapp deployed as a folder without a WAR must be disabled before a WAR can replace
+  it.
 
 ## Sessions and privacy
 

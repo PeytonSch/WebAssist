@@ -45,6 +45,13 @@ const S = {
 
 let onToggle: (open: boolean) => void = () => undefined;
 const root = () => $('settings');
+let pendingSection: string | null = null;
+
+function scrollToPending(): void {
+  if (!pendingSection || !S.draft) return;
+  root().querySelector(`#set-${CSS.escape(pendingSection)}`)?.scrollIntoView({ block: 'start' });
+  pendingSection = null;
+}
 
 // ── Draft access ────────────────────────────────────────
 
@@ -529,6 +536,7 @@ function sections(): SectionDef[] {
           ]),
           'What the %D field in the access log pattern counts.',
         ),
+        ...tomcatManagementFields(),
       ],
     },
     {
@@ -611,6 +619,62 @@ function sections(): SectionDef[] {
         field('tail.flushMs', 'Multiline wait', numberInput('tail.flushMs', { min: 10, max: 10_000, unit: 'ms' }), 'How long to wait for the rest of a stack trace before showing it.'),
       ],
     },
+  ];
+}
+
+/** Settings for the Tomcat page (src/ui/tomcat.ts). They work whether or not the logs are recorded. */
+function tomcatManagementFields(): HTMLElement[] {
+  const fileInput = (path: string, title: string, placeholder: string) => {
+    const input = textInput(path, { mono: true, placeholder });
+    const browse = browseButton('file', title, () => input.value, (p) => {
+      input.value = p;
+      change(path, p);
+    });
+    return h('div', { class: 'input-row' }, input, browse);
+  };
+  const password = textInput('tomcat.manager.password', { mono: true });
+  password.type = 'password';
+  return [
+    h(
+      'div',
+      { class: 'field-group', id: 'set-tomcat-management' },
+      h('h3', {}, 'Management'),
+      h('p', {}, 'For the Tomcat page: starting and stopping Tomcat and its webapps, disabling webapps, and deploying WARs you build. Works whether or not the logs above are recorded.'),
+    ),
+    field('tomcat.webappsDir', 'Webapps folder', folderInput('tomcat.webappsDir', 'Choose Tomcat’s webapps folder'), h('span', {}, 'Where Tomcat deploys from, usually ', h('code', {}, 'CATALINA_BASE/webapps'), '.')),
+    field(
+      'tomcat.disabledDir',
+      'Disabled webapps folder',
+      folderInput('tomcat.disabledDir', 'Choose a folder for disabled webapps'),
+      'Disable moves a webapp here so Tomcat forgets it; Enable moves it back. Must be outside the webapps folder.',
+    ),
+    field(
+      'tomcat.startScript',
+      'Start script',
+      fileInput('tomcat.startScript', 'Choose the script that starts Tomcat', isWindows ? 'C:/tomcat/bin/startup.bat' : '/opt/tomcat/bin/startup.sh'),
+      'Run by Start Tomcat, in its own folder. Your own script is fine; it may also keep Tomcat in the foreground.',
+    ),
+    field('tomcat.stopScript', 'Stop script', fileInput('tomcat.stopScript', 'Choose the script that stops Tomcat', isWindows ? 'C:/tomcat/bin/shutdown.bat' : '/opt/tomcat/bin/shutdown.sh'), 'Run by Stop Tomcat.'),
+    field(
+      'tomcat.manager.url',
+      'Manager URL',
+      textInput('tomcat.manager.url', { mono: true, placeholder: 'http://localhost:8080/manager/text' }),
+      'Optional. The Tomcat Manager’s text interface, for starting, stopping and reloading single webapps. Without it, Disable and Enable stop and start them.',
+    ),
+    field('tomcat.manager.username', 'Manager user', textInput('tomcat.manager.username', { mono: true }), h('span', {}, 'A user with the ', h('code', {}, 'manager-script'), ' role in ', h('code', {}, 'conf/tomcat-users.xml'), '.')),
+    field('tomcat.manager.password', 'Manager password', password, 'Stored in the settings file as plain text.'),
+    field(
+      'tomcat.warWatch',
+      'WAR build folders',
+      listEditor('tomcat.warWatch', {
+        itemLabel: 'WAR folder',
+        addLabel: 'Add folder',
+        placeholder: isWindows ? 'C:/dev/shop/target' : '/home/me/dev/shop/target',
+        empty: 'No folders watched.',
+        browse: { kind: 'folder', title: 'Choose a folder where WARs are built' },
+      }),
+      h('span', {}, 'When a new or rebuilt WAR appears here, Debug Hub offers to deploy it. Use ', h('code', {}, '*'), ' for several projects, e.g. ', h('code', {}, 'C:/dev/*/target'), '.'),
+    ),
   ];
 }
 
@@ -798,6 +862,7 @@ async function load(): Promise<void> {
   S.draft = structuredClone(S.loaded!.config);
   S.savedJson = JSON.stringify(S.draft);
   render();
+  scrollToPending();
 }
 
 async function saveSettings(): Promise<void> {
@@ -845,9 +910,14 @@ export function settingsOpen(): boolean {
   return S.open;
 }
 
-export function openSettings(): void {
+/** `section` scrolls to that card, e.g. "tomcat" (also from a #settings/tomcat link). */
+export function openSettings(section?: string): void {
+  if (typeof section === 'string' && section) pendingSection = section;
   if (location.hash !== '#settings') history.replaceState(null, '', '#settings');
-  if (S.open) return;
+  if (S.open) {
+    scrollToPending();
+    return;
+  }
   S.open = true;
   root().hidden = false;
   document.body.classList.add('settings-open');
@@ -863,7 +933,8 @@ export function closeSettings(): boolean {
   root().hidden = true;
   root().replaceChildren();
   document.body.classList.remove('settings-open');
-  if (location.hash) history.replaceState(null, '', location.pathname + location.search);
+  // Leave another screen's hash (#tomcat) alone.
+  if (location.hash.startsWith('#settings')) history.replaceState(null, '', location.pathname + location.search);
   onToggle(false);
   return true;
 }
@@ -875,8 +946,8 @@ export function updateSettingsStatus(status: HubStatus): void {
 
 export function initSettings(opts: { onToggle: (open: boolean) => void }): void {
   onToggle = opts.onToggle;
-  desktop?.onOpenSettings(openSettings);
-  const sync = () => (location.hash.startsWith('#settings') ? openSettings() : closeSettings());
+  desktop?.onOpenSettings(() => openSettings());
+  const sync = () => (location.hash.startsWith('#settings') ? openSettings(location.hash.split('/')[1]) : closeSettings());
   window.addEventListener('hashchange', sync);
   sync();
 
