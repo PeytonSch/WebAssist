@@ -68,12 +68,29 @@ export interface ScriptHooks {
   onExit?: (run: ScriptRun) => void;
 }
 
+export interface RunOptions {
+  /** The environment to run it with. Default: Debug Hub's own. */
+  env?: Record<string, string>;
+  /**
+   * Ask Windows to start its windows hidden. On for the user's scripts, so a helper script does
+   * not flash a console. Off for Tomcat's own startup.bat, which opens Tomcat in a console window
+   * of its own ("start Tomcat ..."), the traditional way, and that window must stay visible.
+   */
+  windowsHide?: boolean;
+}
+
 export class ScriptRunner {
   private runs = new Map<ScriptKind, Running>();
 
   constructor(private logDir = join(tmpdir(), 'debug-hub', 'tomcat-scripts'), private hooks: ScriptHooks = {}) {}
 
-  async run(kind: ScriptKind, script: string): Promise<ScriptRun> {
+  /** A run of this kind has not finished yet. */
+  isRunning(kind: ScriptKind): ScriptRun | null {
+    const r = this.runs.get(kind);
+    return r?.run.running ? r.run : null;
+  }
+
+  async run(kind: ScriptKind, script: string, opts: RunOptions = {}): Promise<ScriptRun> {
     const label = kind === 'start' ? 'start script' : 'stop script';
     if (!script) throw new TomcatError(`No Tomcat ${label} is set. Add one in Settings › Tomcat.`);
     const prev = this.runs.get(kind);
@@ -126,8 +143,9 @@ export class ScriptRunner {
         cwd: dirname(script),
         stdio: ['ignore', fd, fd],
         detached: true,
-        windowsHide: true,
+        windowsHide: opts.windowsHide ?? true,
         windowsVerbatimArguments: cmd.verbatim,
+        env: opts.env,
       });
       run.pid = child.pid ?? null;
       child.once('error', failed);
@@ -217,7 +235,7 @@ export class OutputFollower {
   }
 }
 
-async function readTail(file: string, max: number): Promise<{ text: string; truncated: boolean }> {
+export async function readTail(file: string, max: number): Promise<{ text: string; truncated: boolean }> {
   let handle;
   try {
     handle = await fs.open(file, 'r');

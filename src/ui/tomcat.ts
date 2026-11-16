@@ -1,10 +1,11 @@
-import type { ScriptKind, ScriptRun, TomcatState, WarInfo, WebappAction, WebappInfo } from '../shared/tomcat';
+import type { CommandRun, LaunchWay, ScriptKind, ScriptRun, StartCommandInfo, StartStep, TomcatState, WarInfo, WebappAction, WebappInfo } from '../shared/tomcat';
 import { $, fmtBytes, h, type Child } from './dom';
 import { closeSettings, openSettings, settingsOpen } from './settings';
 
 /**
- * The Tomcat page: start and stop the server with the user's scripts, start, stop, disable and
- * enable webapps, and deploy WARs from the build folders. Also the new-WAR notifications, which
+ * The Tomcat page: start and stop the server (with the user's scripts or Tomcat's own, along with
+ * the start commands that bring up the rest of the dev setup), start, stop, disable and enable
+ * webapps, and deploy WARs from the build folders. Also the new-WAR notifications, which
  * show on every screen. Everything shown comes from GET /api/tomcat, refreshed while the page is
  * open; actions are POSTs that answer with a sentence for the banner.
  */
@@ -19,7 +20,7 @@ const T = {
   state: null as TomcatState | null,
   stateJson: '',
   loadError: null as string | null,
-  /** Keys of actions in flight: "app:shop", "script:start", "war:<file>". */
+  /** Keys of actions in flight: "app:shop", "script:start", "war:<file>", "cmd:<index>", "run:<id>". */
   busy: new Set<string>(),
   banner: null as { kind: 'error' | 'info'; text: string } | null,
   timer: 0,
@@ -109,7 +110,7 @@ async function refresh(): Promise<void> {
 function schedule(): void {
   clearTimeout(T.timer);
   if (!T.open) return;
-  const running = !!(T.state?.scripts.start?.running || T.state?.scripts.stop?.running);
+  const running = !!(T.state?.scripts.start?.running || T.state?.scripts.stop?.running || T.state?.sequence?.running);
   T.timer = window.setTimeout(async () => {
     if (!document.hidden) await refresh();
     schedule();
@@ -135,12 +136,20 @@ async function act(key: string, run: () => Promise<string | undefined>): Promise
 const webappAction = (app: WebappInfo, action: WebappAction) =>
   act(`app:${app.name}`, async () => (await api(`/api/tomcat/webapps/${encodeURIComponent(app.name)}/${action}`, {})).message);
 
-const scriptAction = (kind: ScriptKind) =>
+const scriptAction = (kind: ScriptKind, only = false) =>
   act(`script:${kind}`, async () => {
-    // The output panel shows how it went.
-    await api<{ run: ScriptRun }>(`/api/tomcat/server/${kind}`, {});
+    // The output panel and the start steps show how it went.
+    await api(`/api/tomcat/server/${kind}`, kind === 'start' ? { only } : {});
     return undefined;
   });
+
+const runCommand = (c: StartCommandInfo) =>
+  act(`cmd:${c.index}`, async () => {
+    await api(`/api/tomcat/commands/${c.index}/run`, { command: c.command });
+    return undefined;
+  });
+
+const stopRun = (run: CommandRun) => act(`run:${run.id}`, async () => (await api(`/api/tomcat/runs/${run.id}/stop`, {})).message);
 
 // ── Page ────────────────────────────────────────────────
 
@@ -204,41 +213,170 @@ function scriptPanel(s: TomcatState): HTMLElement | null {
   return h(
     'div',
     { class: 'tm-script-run' },
-    h('div', { class: 'tm-run-head' }, h('b', {}, `${run.kind === 'start' ? 'Start' : 'Stop'} script`), h('span', { class: 'muted' }, `started ${time(run.startedAt)}`), status),
+    h('div', { class: 'tm-run-head' }, h('b', {}, `${run.kind === 'start' ? 'Start' : 'Stop'}: ${fileName(run.script)}`), h('span', { class: 'muted' }, `started ${time(run.startedAt)}`), status),
     h('code', { class: 'tm-cmd', title: 'The command that was run' }, run.command),
     out,
   );
 }
 
+/** Which way Start or Stop runs: the user's script, or Tomcat's own one in its bin folder. */
+function launchLabel(s: TomcatState, way: LaunchWay): HTMLElement {
+  if (way.how === 'script') return h('span', { class: 'tm-how' }, 'Your script ', h('code', { class: 'tm-dir', title: way.path ?? '' }, way.path ?? ''));
+  if (way.how === 'tomcat') {
+    return h('span', { class: 'tm-how' }, `Tomcat’s bin/${fileName(way.path ?? '')} in `, h('code', { class: 'tm-dir', title: s.launch.home ?? '' }, s.launch.home ?? ''));
+  }
+  return h('span', { class: 'muted' }, 'Not set up');
+}
+
+/** CATALINA_BASE and JAVA_HOME, when Tomcat's own scripts are used: what startup.bat will be given. */
+function launchDetails(s: TomcatState): HTMLElement | null {
+  const l = s.launch;
+  if (l.start.how !== 'tomcat' && l.stop.how !== 'tomcat') return null;
+  const parts: Child[] = [];
+  if (l.base && l.base !== l.home) parts.push(h('span', {}, 'CATALINA_BASE ', h('code', {}, l.base)));
+  const javaFrom = { settings: 'from Settings', environment: 'from Debug Hub’s environment', setenv: 'set in Tomcat’s bin/setenv' };
+  if (l.javaSource === 'setenv') parts.push(h('span', {}, `JAVA_HOME ${javaFrom.setenv}`));
+  else if (l.javaHome) parts.push(h('span', {}, 'JAVA_HOME ', h('code', {}, l.javaHome), ` ${javaFrom[l.javaSource ?? 'environment']}`));
+  if (l.homeSource === 'webapps') parts.push(h('span', {}, 'Tomcat folder found above webapps'));
+  return parts.length ? h('div', { class: 'tm-launch muted' }, ...parts) : null;
+}
+
 function serverCard(s: TomcatState): HTMLElement {
+  const seqRunning = !!s.sequence?.running;
+  const hasExtras = s.commands.length > 0 || s.settings.startChrome;
   const row = (kind: ScriptKind) => {
-    const script = kind === 'start' ? s.settings.startScript : s.settings.stopScript;
+    const way = s.launch[kind];
     const run = s.scripts[kind];
-    const busy = T.busy.has(`script:${kind}`) || !!run?.running;
+    const busy = T.busy.has(`script:${kind}`) || !!run?.running || (kind === 'start' && seqRunning);
     const label = kind === 'start' ? 'Start Tomcat' : 'Stop Tomcat';
+    const what = way.how === 'script' ? way.path : way.how === 'tomcat' ? `Tomcat’s ${fileName(way.path ?? '')}` : '';
+    const why = run?.running
+      ? 'The last run has not finished yet'
+      : kind === 'start' && seqRunning
+        ? 'Tomcat is being started'
+        : way.how === 'none'
+          ? 'Set the Tomcat folder or a script in Settings › Tomcat server'
+          : kind === 'start' && hasExtras
+            ? `Runs the start commands, then ${what}${s.settings.startChrome ? ', then starts Chrome' : ''}`
+            : `Runs ${what}`;
+    const buttons: HTMLElement[] = [
+      button(T.busy.has(`script:${kind}`) ? 'Running…' : label, () => void scriptAction(kind), { primary: kind === 'start', disabled: way.how === 'none' || busy, title: why }),
+    ];
+    if (kind === 'start' && hasExtras) {
+      buttons.push(button('Tomcat only', () => void scriptAction('start', true), { disabled: way.how === 'none' || busy, title: 'Start Tomcat without the start commands or Chrome' }));
+    }
     return h(
       'div',
       { class: 'tm-script' },
-      h('span', { class: 'tm-script-label' }, kind === 'start' ? 'Start script' : 'Stop script'),
-      script ? h('code', { class: 'path', title: script }, script) : h('span', { class: 'muted' }, 'Not set'),
-      button(T.busy.has(`script:${kind}`) ? 'Running…' : label, () => void scriptAction(kind), {
-        primary: kind === 'start',
-        disabled: !script || busy,
-        title: run?.running ? 'The last run has not finished yet' : script ? `Runs ${script}` : 'Set a script in Settings › Tomcat',
-      }),
+      h('span', { class: 'tm-script-label' }, kind === 'start' ? 'Start' : 'Stop'),
+      launchLabel(s, way),
+      h('div', { class: 'tm-actions' }, ...buttons),
     );
   };
   const mgr = s.manager;
   const tools = mgr.configured
     ? h('span', { class: `collector ${mgr.ok ? 'connected' : 'off'}`, title: mgr.error ?? s.settings.managerUrl }, mgr.ok ? 'Manager connected' : 'Manager unreachable')
     : null;
-  const body: Child[] = [row('start'), row('stop'), ...problemNotes(['startScript', 'stopScript'])];
-  if (!s.settings.startScript && !s.settings.stopScript) {
-    body.push(missing('Add the scripts you use to start and stop Tomcat (startup.bat, a custom script…) in ', settingsLink(), '.'));
+  const body: Child[] = [row('start'), row('stop'), launchDetails(s), ...problemNotes(['startScript', 'stopScript'])];
+  const l = s.launch;
+  if (l.start.how === 'none' && l.stop.how === 'none' && !l.home) {
+    body.push(missing('Set the Tomcat folder (CATALINA_HOME) to start and stop Tomcat with its own startup and shutdown scripts, or add your own scripts, in ', settingsLink(), '.'));
+  } else {
+    for (const text of [...l.problems, ...l.warnings]) body.push(h('div', { class: 'tm-note warn' }, text, ' ', settingsLink('Fix in Settings')));
   }
   if (mgr.configured && !mgr.ok && mgr.error) body.push(h('div', { class: 'tm-note warn' }, mgr.error));
-  body.push(scriptPanel(s));
-  return card('server', 'Server', 'Start and stop Tomcat with your own scripts.', tools, ...body);
+  body.push(sequencePanel(s), commandsPanel(s), scriptPanel(s));
+  return card('server', 'Server', 'Start and stop Tomcat, and the rest of your dev setup with it.', tools, ...body);
+}
+
+const STEP_LABEL: Record<StartStep['status'], string> = { waiting: 'Waiting', running: 'Running', done: 'Done', failed: 'Failed', skipped: 'Skipped' };
+
+/** The steps of the latest Start Tomcat, while it runs and after. Not shown for Tomcat alone. */
+function sequencePanel(s: TomcatState): HTMLElement | null {
+  const seq = s.sequence;
+  if (!seq || seq.steps.length < 2) return null;
+  const at = seq.steps.findIndex((x) => x.status === 'running');
+  const head = seq.running
+    ? h('span', { class: 'tm-run running' }, `Step ${at + 1} of ${seq.steps.length}: ${seq.steps[at]?.label ?? ''}`)
+    : h('span', { class: `tm-run ${seq.outcome === 'ok' ? 'ok' : 'error'}` }, seq.message ?? '');
+  return h(
+    'div',
+    { class: 'tm-seq' },
+    h('div', { class: 'tm-run-head' }, h('b', {}, 'Start Tomcat'), h('span', { class: 'muted' }, `started ${time(seq.startedAt)}`), head),
+    h(
+      'ol',
+      { class: 'tm-steps' },
+      ...seq.steps.map((step) =>
+        h(
+          'li',
+          { class: `tm-step ${step.status}` },
+          h('span', { class: 'tm-step-state', title: STEP_LABEL[step.status] }, STEP_LABEL[step.status]),
+          h('b', {}, step.label),
+          step.detail ? h('span', { class: 'muted' }, step.detail) : null,
+        ),
+      ),
+    ),
+  );
+}
+
+function runStatus(run: CommandRun | null): HTMLElement {
+  if (!run) return h('span', { class: 'tm-run muted' }, 'Not run yet');
+  if (run.error) return h('span', { class: 'tm-run error', title: run.error }, 'Failed to start');
+  if (run.running) return h('span', { class: 'tm-run running' }, `Running${run.pid ? ` (process ${run.pid})` : ''}`);
+  const when = run.endedAt ? ` at ${time(run.endedAt)}` : '';
+  if (run.stopped) return h('span', { class: 'tm-run muted' }, `Stopped${when}`);
+  if (run.exitCode === 0) return h('span', { class: 'tm-run ok' }, `Finished${when}`);
+  return h('span', { class: 'tm-run error' }, `${run.exitCode != null ? `Exited with code ${run.exitCode}` : `Ended by ${run.signal}`}${when}`);
+}
+
+/** The last few lines a command printed; the timeline has all of it. */
+function lastLines(run: CommandRun | null, n = 6): HTMLElement | null {
+  if (!run) return null;
+  const text = run.error ? run.error : run.output.replace(/\s+$/, '');
+  if (!text) return null;
+  const lines = text.split(/\r?\n/);
+  return h('pre', { class: 'code tm-cmd-out', title: 'The end of its output. All of it is on the timeline.' }, (lines.length > n || run.outputTruncated ? '…\n' : '') + lines.slice(-n).join('\n'));
+}
+
+function commandRow(c: StartCommandInfo | null, run: CommandRun | null, n: number | null): HTMLElement {
+  const actions: HTMLElement[] = [];
+  if (run?.running) {
+    actions.push(button(T.busy.has(`run:${run.id}`) ? 'Stopping…' : 'Stop', () => void stopRun(run), { disabled: T.busy.has(`run:${run.id}`), title: 'End it and everything it started' }));
+  } else if (c) {
+    actions.push(button('Run', () => void runCommand(c), { disabled: T.busy.has(`cmd:${c.index}`), title: 'Run just this command now' }));
+  }
+  const name = c ? c.name || c.command : run!.name;
+  const command = c?.command ?? run!.command;
+  const cwd = c?.cwd ?? run!.cwd;
+  const tags = c ? [h('span', { class: 'tm-tag', title: c.wait ? 'Start Tomcat waits for it to finish, and stops if it fails' : 'Started and left running' }, c.wait ? 'waits' : 'keeps running')] : [h('span', { class: 'tm-tag' }, 'no longer in Settings')];
+  return h(
+    'div',
+    { class: 'tm-cmd-row' },
+    h('div', { class: 'tm-cmd-main' },
+      h('div', { class: 'tm-name' }, n != null ? h('span', { class: 'muted' }, `${n}.`) : null, h('b', {}, name), ...tags),
+      h('code', { class: 'tm-cmd', title: `In ${cwd}` }, command),
+      h('span', { class: 'muted tm-folder', title: cwd }, `\u200E${cwd}\u200E`),
+    ),
+    h('div', {}, runStatus(run)),
+    h('div', { class: 'tm-actions' }, ...actions),
+    lastLines(run),
+  );
+}
+
+function commandsPanel(s: TomcatState): HTMLElement | null {
+  if (!s.commands.length && !s.otherRuns.length) {
+    return s.settings.startChrome
+      ? null
+      : h('div', { class: 'tm-note' }, 'Start your database, dev servers and watchers along with Tomcat: add start commands in ', settingsLink(), '.');
+  }
+  const order = [s.commands.length ? 'the start commands in order' : '', 'Tomcat', s.settings.startChrome ? 'Chrome' : ''].filter(Boolean).join(', then ');
+  return h(
+    'div',
+    { class: 'tm-cmds' },
+    h('div', { class: 'tm-run-head' }, h('b', {}, 'Start commands'), h('span', { class: 'muted' }, `Start Tomcat runs ${order}.`), settingsLink('Edit')),
+    ...s.commands.map((c, i) => commandRow(c, c.run, i + 1)),
+    ...s.otherRuns.map((r) => commandRow(null, r, null)),
+  );
 }
 
 /** The Manager's own webapp: stopping or disabling it would cut off this page's control. */
