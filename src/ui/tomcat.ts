@@ -510,21 +510,26 @@ async function openDelete(app: WebappInfo): Promise<void> {
 
 // ── Deploy dialog ───────────────────────────────────────
 
-/** "config.yaml and config.js", "a, b and c". */
-function andList(items: string[]): string {
-  return items.length > 1 ? `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}` : (items[0] ?? '');
+/**
+ * The file names to keep, for the checkbox: "config.yaml, config.js and log4j2.xml". A long list
+ * is cut short ("a, b, c and 4 more"); the files found are listed below it anyway.
+ */
+function nameList(names: string[], and = 'and'): string {
+  if (names.length > 4) return `${names.slice(0, 3).join(', ')} ${and} ${names.length - 3} more`;
+  return names.length > 1 ? `${names.slice(0, -1).join(', ')} ${and} ${names[names.length - 1]}` : (names[0] ?? '');
 }
 
 /**
- * The "Keep config.yaml and config.js" choice: which files the deploy would carry over from the
- * copy it replaces, and whether each replaces the build's own or is added.
+ * The "Keep config.yaml, config.js and log4j2.xml" choice (names from Settings): which files the
+ * deploy would carry over from the copy it replaces, and whether each replaces the build's own
+ * or is added.
  */
 function keepSection(preview: KeepPreview, box: HTMLInputElement): Child[] {
-  const names = andList(preview.patterns);
   const from = preview.source?.where === 'disabled' ? 'disabled copy' : 'deployed copy';
   if (!preview.files.length) {
-    return preview.source ? [h('p', { class: 'muted' }, `No ${names.replace(/ and /, ' or ')} in the ${from} to keep.`)] : [];
+    return preview.source ? [h('p', { class: 'muted' }, `No ${nameList(preview.patterns, 'or')} in the ${from} to keep.`)] : [];
   }
+  const names = nameList(preview.patterns);
   if (preview.problem) {
     box.checked = false;
     box.disabled = true;

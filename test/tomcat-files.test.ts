@@ -160,6 +160,44 @@ describe('kept files', () => {
   });
 });
 
+describe('kept files with the default names', () => {
+  it('finds log4j2.xml in WEB-INF/classes and keeps each same-named file at its own path', async () => {
+    tree({
+      'build/': '',
+      'webapps/shop.war': 'old',
+      'webapps/shop/WEB-INF/classes/log4j2.xml': '<Configuration status="debug"/>',
+      'webapps/shop/WEB-INF/classes/config.yaml': 'classes: mine',
+      'webapps/shop/WEB-INF/lib/log4j2.xml': 'not this one',
+      'webapps/shop/js/config.js': 'one',
+      'webapps/shop/admin/js/config.js': 'two',
+    });
+    const cfg: Config = structuredClone(DEFAULT_CONFIG);
+    Object.assign(cfg.tomcat, { webappsDir: join(dir, 'webapps'), disabledDir: join(dir, 'disabled'), warWatch: [join(dir, 'build')] });
+    const svc = new TomcatService(cfg, { emit: () => undefined, onWar: () => undefined }, { scriptLogDir: join(dir, 'logs') });
+    await svc.warWatcher.tick();
+    const file = join(dir, 'build', 'shop.war');
+    await war(file, { 'WEB-INF/classes/log4j2.xml': '<Configuration status="warn"/>', 'js/config.js': 'build', 'index.html': 'new' });
+    await svc.warWatcher.tick();
+
+    const preview = await svc.keepPreview('shop', file);
+    expect(preview.patterns).toEqual(['config.yaml', 'config.js', 'log4j2.xml']);
+    expect(preview.files.map((f) => [f.path, f.inWar])).toEqual([
+      ['admin/js/config.js', false],
+      ['js/config.js', true],
+      ['WEB-INF/classes/config.yaml', false],
+      ['WEB-INF/classes/log4j2.xml', true],
+    ]);
+    await svc.deploy(file, 'shop', 'remove', preview.files.map((f) => f.path));
+    expect(await warFiles(join(dir, 'webapps', 'shop.war'))).toEqual({
+      'WEB-INF/classes/log4j2.xml': '<Configuration status="debug"/>',
+      'js/config.js': 'one',
+      'index.html': 'new',
+      'admin/js/config.js': 'two',
+      'WEB-INF/classes/config.yaml': 'classes: mine',
+    });
+  });
+});
+
 describe('TomcatService delete and keep', () => {
   function service(over: Partial<Config['tomcat']> = {}) {
     const cfg: Config = structuredClone(DEFAULT_CONFIG);
@@ -201,7 +239,7 @@ describe('TomcatService delete and keep', () => {
     const file = await newBuild(svc, { 'config.yaml': 'env: build\n', 'index.html': 'new', 'WEB-INF/web.xml': '<web-app/>' });
 
     const preview = await svc.keepPreview('shop', file);
-    expect(preview).toMatchObject({ patterns: ['config.yaml', 'config.js'], source: { kind: 'folder', where: 'webapps' }, problem: null });
+    expect(preview).toMatchObject({ patterns: ['config.yaml', 'config.js', 'log4j2.xml'], source: { kind: 'folder', where: 'webapps' }, problem: null });
     expect(preview.files).toEqual([
       { path: 'config.yaml', bytes: 10, inWar: true },
       { path: 'js/config.js', bytes: 9, inWar: false },
