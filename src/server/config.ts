@@ -45,6 +45,22 @@ export interface Config {
     manager: { url: string; username: string; password: string };
     /** Folders (or `*` patterns) where WARs are built; a new or rebuilt WAR offers a deploy. */
     warWatch: string[];
+    /**
+     * CATALINA_HOME, for starting and stopping Tomcat with its own bin/startup and bin/shutdown
+     * when no start or stop script is set. Empty: the folder above webappsDir, if it has bin/.
+     */
+    home: string;
+    /** JAVA_HOME for Tomcat's own scripts. Empty: whatever Debug Hub's environment has. */
+    javaHome: string;
+    /** Run, in order, each time Tomcat is started from the Tomcat page: the rest of the dev setup. */
+    startCommands: StartCommand[];
+    /** Also start Chrome with its debugging port when starting Tomcat. */
+    startChrome: boolean;
+    /**
+     * File names kept from the deployed copy of a webapp when a new WAR replaces it, e.g. local
+     * settings the build would overwrite. `*` allowed. Offered as a choice when deploying.
+     */
+    preserveFiles: string[];
   };
   postgres: {
     enabled: boolean;
@@ -66,6 +82,17 @@ export interface Config {
     logPatterns: string[];
     timeWindowMs: number;
   };
+}
+
+export interface StartCommand {
+  /** Shown on the Tomcat page and the timeline. */
+  name: string;
+  /** A command line, run by the system shell (cmd.exe on Windows, /bin/sh elsewhere). */
+  command: string;
+  /** Working folder. Empty: the settings file's folder. */
+  cwd: string;
+  /** Wait for it to finish, and stop if it fails, before running the next step. */
+  wait: boolean;
 }
 
 export const DEFAULT_CONFIG: Config = {
@@ -92,6 +119,11 @@ export const DEFAULT_CONFIG: Config = {
     stopScript: '',
     manager: { url: '', username: '', password: '' },
     warWatch: [],
+    home: '',
+    javaHome: '',
+    startCommands: [],
+    startChrome: false,
+    preserveFiles: ['config.yaml', 'config.js'],
   },
   postgres: { enabled: false, logs: [] },
   tail: { fromStart: false, pollMs: 200, flushMs: 150 },
@@ -160,6 +192,9 @@ export function resolvePaths(config: Config, base: string): Config {
   config.tomcat.startScript = opt(config.tomcat.startScript);
   config.tomcat.stopScript = opt(config.tomcat.stopScript);
   config.tomcat.warWatch = config.tomcat.warWatch.map(abs);
+  config.tomcat.home = opt(config.tomcat.home);
+  config.tomcat.javaHome = opt(config.tomcat.javaHome);
+  config.tomcat.startCommands = config.tomcat.startCommands.map((c) => ({ ...c, cwd: abs(c.cwd || '.') }));
   config.postgres.logs = config.postgres.logs.map(abs);
   return config;
 }
@@ -300,6 +335,13 @@ export function validateConfig(input: unknown): { config: Config; errors: FieldE
     errors.push({ path: 'tomcat.manager.url', message: 'Must start with http:// or https://' });
   }
   config.tomcat.warWatch = list('tomcat.warWatch', config.tomcat.warWatch);
+  config.tomcat.home = optText('tomcat.home', config.tomcat.home, 'Tomcat folder');
+  config.tomcat.javaHome = optText('tomcat.javaHome', config.tomcat.javaHome, 'Java folder');
+  config.tomcat.startChrome = bool('tomcat.startChrome', config.tomcat.startChrome);
+  config.tomcat.preserveFiles = list('tomcat.preserveFiles', config.tomcat.preserveFiles, (n) =>
+    /[\\/]/.test(n) ? 'A file name only, without a folder' : null,
+  );
+  config.tomcat.startCommands = startCommands(config.tomcat.startCommands);
 
   config.postgres.enabled = bool('postgres.enabled', config.postgres.enabled);
   config.postgres.logs = list('postgres.logs', config.postgres.logs);
@@ -324,6 +366,29 @@ export function validateConfig(input: unknown): { config: Config; errors: FieldE
       return (err as Error).message.replace(/^Invalid regular expression: /, '');
     }
   });
+
+  /** Rows left completely blank are dropped; a row with anything in it needs a command. */
+  function startCommands(v: unknown): StartCommand[] {
+    if (!Array.isArray(v)) {
+      errors.push({ path: 'tomcat.startCommands', message: 'Must be a list' });
+      return [];
+    }
+    const out: StartCommand[] = [];
+    v.forEach((item, i) => {
+      const at = `tomcat.startCommands.${i}`;
+      if (!isObj(item)) return errors.push({ path: at, message: 'Must be a command' });
+      const c: StartCommand = {
+        name: optText(`${at}.name`, item.name, 'Name'),
+        command: optText(`${at}.command`, item.command, 'Command'),
+        cwd: optText(`${at}.cwd`, item.cwd, 'Folder'),
+        wait: item.wait === true,
+      };
+      if (!c.name && !c.command && !c.cwd) return;
+      if (!c.command) errors.push({ path: `${at}.command`, message: 'Command is required' });
+      out.push(c);
+    });
+    return out;
+  }
 
   return { config, errors };
 }

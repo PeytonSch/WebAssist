@@ -48,6 +48,22 @@ describe('validateConfig', () => {
     expect((config as any).future).toEqual({ keep: true });
   });
 
+  it('drops blank start commands and requires a command on the others', () => {
+    const input: any = structuredClone(DEFAULT_CONFIG);
+    input.tomcat.startCommands = [
+      { name: ' Postgres ', command: ' net start postgresql-x64-16 ', cwd: '', wait: true },
+      { name: '', command: '', cwd: '' },
+      { name: 'Vite', command: '', cwd: 'C:/dev/web' },
+    ];
+    input.tomcat.preserveFiles = ['config.yaml', 'conf/app.js'];
+    const { config, errors } = validateConfig(input);
+    expect(config.tomcat.startCommands).toEqual([
+      { name: 'Postgres', command: 'net start postgresql-x64-16', cwd: '', wait: true },
+      { name: 'Vite', command: '', cwd: 'C:/dev/web', wait: false },
+    ]);
+    expect(errors.map((e) => e.path)).toEqual(['tomcat.startCommands.2.command', 'tomcat.preserveFiles.1']);
+  });
+
   it('refuses a Chrome port equal to the hub port', () => {
     const input: any = structuredClone(DEFAULT_CONFIG);
     input.chrome.port = input.port;
