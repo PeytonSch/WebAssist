@@ -959,6 +959,24 @@ code.path {
 .list-rows { display: flex; flex-direction: column; gap: 8px; }
 .list-row { display: flex; flex-direction: column; gap: 4px; }
 .list-empty { color: var(--muted); font-size: 12px; padding: 4px 0; }
+
+/* A setting whose control needs the full width (the start commands): help above, control below. */
+.field.wide { grid-template-columns: 1fr; }
+.field.wide .field-help { max-width: 760px; }
+.sc-row { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-2); }
+.sc-row.invalid, .sc-row:has(.list-row.invalid) { border-color: var(--error); }
+.sc-head { display: grid; grid-template-columns: 70px minmax(0, 1fr) auto; gap: 8px; align-items: start; }
+.sc-num { align-self: center; color: var(--muted); font-weight: 600; font-size: 12px; }
+.sc-num::before { content: "#"; }
+.sc-tools { display: flex; gap: 2px; }
+.sc-tools .btn-icon { font-size: 15px; }
+.sc-grid { display: grid; grid-template-columns: 70px minmax(0, 1fr); gap: 6px 8px; align-items: start; padding-right: 104px; }
+.sc-label { padding-top: 7px; color: var(--text-2); font-size: 12px; }
+.sc-row .input { width: 100%; }
+.sc-wait { white-space: normal; }
+@media (max-width: 760px) {
+  .sc-grid { padding-right: 0; }
+}
 .list-add { align-self: flex-start; padding: 0 6px; color: var(--accent); }
 .list-add:hover { background: var(--accent-soft); }
 .list-note { font-size: 12px; margin-top: 2px; }
@@ -1103,7 +1121,7 @@ body.tomcat-open #main { display: none; }
 .tm-note { margin: 10px 0; padding: 8px 12px; border-radius: 8px; background: var(--surface-2); border: 1px solid var(--border); color: var(--text-2); font-size: 12px; }
 .tm-note.warn { color: var(--warn); background: var(--warn-soft); border-color: color-mix(in srgb, var(--warn) 30%, transparent); }
 
-.tm-script { display: grid; grid-template-columns: 100px minmax(0, 1fr) 130px; gap: 12px; align-items: center; padding: 10px 0; border-top: 1px solid var(--border); }
+.tm-script { display: grid; grid-template-columns: 100px minmax(0, 1fr) minmax(130px, auto); gap: 12px; align-items: center; padding: 10px 0; border-top: 1px solid var(--border); }
 .card-body > .tm-script:first-child { border-top: 0; }
 .tm-script-label { font-weight: 550; }
 .tm-script .btn { justify-content: center; }
@@ -1115,6 +1133,31 @@ body.tomcat-open #main { display: none; }
 .tm-run.running { color: var(--accent); }
 .tm-cmd { font: 11.5px var(--mono); color: var(--muted); overflow-wrap: anywhere; }
 pre.code.tm-output { max-height: 280px; white-space: pre-wrap; }
+
+/* How Start and Stop run, and the start commands that come with Start. */
+.tm-how { min-width: 0; overflow-wrap: anywhere; }
+.tm-how code { font: 12px var(--mono); }
+.tm-launch { display: flex; flex-wrap: wrap; gap: 4px 16px; padding: 0 0 10px 112px; font-size: 12px; }
+.tm-launch code { font: 11.5px var(--mono); overflow-wrap: anywhere; }
+.tm-seq, .tm-cmds { margin: 6px 0 14px; padding-top: 12px; border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 6px; }
+.tm-steps { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 4px; }
+.tm-step { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; font-size: 12.5px; }
+.tm-step .muted { overflow-wrap: anywhere; min-width: 0; }
+.tm-step-state { flex: none; width: 70px; display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; font-weight: 550; color: var(--muted); }
+.tm-step-state::before { content: ""; width: 7px; height: 7px; border-radius: 50%; border: 1.5px solid var(--muted); box-sizing: border-box; }
+.tm-step.running .tm-step-state { color: var(--accent); }
+.tm-step.running .tm-step-state::before { border-color: var(--accent); background: var(--accent); animation: tm-pulse 1s ease-in-out infinite alternate; }
+.tm-step.done .tm-step-state { color: var(--ok); }
+.tm-step.done .tm-step-state::before { border-color: var(--ok); background: var(--ok); }
+.tm-step.failed .tm-step-state { color: var(--error); }
+.tm-step.failed .tm-step-state::before { border-color: var(--error); background: var(--error); }
+.tm-step.skipped { opacity: 0.6; }
+@keyframes tm-pulse { to { opacity: 0.35; } }
+.tm-cmd-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(120px, auto) 90px; gap: 4px 12px; align-items: center; padding: 8px 0; border-top: 1px solid var(--border); }
+.tm-cmds > .tm-run-head + .tm-cmd-row { border-top: 0; }
+.tm-cmd-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.tm-cmd-row .tm-folder { font-size: 11px; }
+.tm-cmd-row > pre.tm-cmd-out { grid-column: 1 / -1; margin: 2px 0 0; padding: 6px 10px; max-height: 120px; font-size: 11px; white-space: pre-wrap; overflow: auto; }
 
 .tm-row {
   display: grid;

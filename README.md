@@ -86,7 +86,11 @@ written with forward slashes or pasted as they are (`C:\Users\me\logs`).
 | `tomcat.accessDurationUnit` | `ms` | Unit of `%D`: `ms` up to Tomcat 9, `us` from Tomcat 10. |
 | `tomcat.webappsDir` | | Tomcat's `webapps` folder, for the Tomcat page and WAR deploys. |
 | `tomcat.disabledDir` | | Where disabled webapps are moved. Must be outside `webappsDir`. |
-| `tomcat.startScript`, `tomcat.stopScript` | | Scripts run by Start Tomcat and Stop Tomcat (`.bat`, `.cmd`, `.ps1`, `.sh` or any program). |
+| `tomcat.startScript`, `tomcat.stopScript` | | Scripts run by Start Tomcat and Stop Tomcat (`.bat`, `.cmd`, `.ps1`, `.sh` or any program). Empty: Tomcat's own `bin/startup` and `bin/shutdown`. |
+| `tomcat.home` | (empty) | `CATALINA_HOME`, for Tomcat's own scripts. Empty: the folder above `webappsDir`, if it has `bin`. |
+| `tomcat.javaHome` | (empty) | `JAVA_HOME` for Tomcat's own scripts. Empty: Debug Hub's environment. |
+| `tomcat.startCommands` | `[]` | Commands run by Start Tomcat before Tomcat: `{ "name", "command", "cwd", "wait" }`. See below. |
+| `tomcat.startChrome` | `false` | Start Tomcat also starts Chrome with its debugging port, last. |
 | `tomcat.manager` | | Optional Tomcat Manager login: `{ "url": "http://localhost:8080/manager/text", "username": …, "password": … }`. The password is stored as plain text. |
 | `tomcat.warWatch` | `[]` | Folders where WARs are built; `*` matches any folder name, e.g. `C:/dev/*/target`. |
 | `postgres.enabled`, `postgres.logs` | `false`, `[]` | Postgres server logs. |
@@ -168,10 +172,30 @@ into the error above them.
 The **Tomcat** button in the top bar (or `#tomcat`) opens a page for running Tomcat from Debug
 Hub. Set it up under Settings → Tomcat → Management; the page says what is missing.
 
-- **Server.** Start Tomcat and Stop Tomcat run your own scripts, in the script's folder. The
-  last run's output and exit code are shown, and the output also goes on the timeline as
-  Tomcat events. Debug Hub does not wait for the script: one that keeps Tomcat in the
-  foreground shows as still running, and keeps running when Debug Hub closes.
+- **Server.** Start Tomcat and Stop Tomcat run your own scripts, in the script's folder, or
+  without them Tomcat's own `bin/startup.bat` and `bin/shutdown.bat` (`.sh` elsewhere), the
+  traditional way: with `CATALINA_HOME` set to the Tomcat folder (by default the folder above
+  `webapps`), `CATALINA_BASE` to the folder above `webapps` when that has a `conf` folder, and
+  `JAVA_HOME` to the Java folder if one is set. On Windows, Tomcat then opens in its own
+  console window, as it does from Explorer. The page says which way each button runs and what
+  is missing (on Windows, `startup.bat` needs `JAVA_HOME` or `JRE_HOME`). The last run's output
+  and exit code are shown, and the output also goes on the timeline as Tomcat events. Debug Hub
+  does not wait for the script: one that keeps Tomcat in the foreground shows as still running,
+  and keeps running when Debug Hub closes.
+- **Start commands.** To bring up the whole dev setup at once, add start commands under
+  Settings → Tomcat server. Start Tomcat runs them first, in order, then Tomcat, then Chrome if
+  **Also start Chrome** is on. Each command runs in the system shell (`cmd.exe` on Windows,
+  `/bin/sh` elsewhere) in its folder (empty: the settings file's folder), detached, so it keeps
+  running when Debug Hub closes; its output goes on the timeline under its name. A command
+  marked **wait** must finish, with exit code 0, before the next step, within 5 minutes; if it
+  fails or takes longer, the sequence stops and Tomcat is not started (a command that timed out
+  is left running). Use it for what Tomcat needs first, e.g. `net start postgresql-x64-16`.
+  Other commands are started and left running, e.g. `npm run dev` in the web project's folder;
+  one still running from an earlier Start is not started again. The page shows each step's
+  progress and each command's status and last lines of output; **Run** runs one command on its
+  own and **Stop** ends it with everything it started (`taskkill /T` on Windows, its process
+  group elsewhere). **Tomcat only** starts just Tomcat. A second Start while one is under way
+  is refused.
 - **Webapps.** Everything in `webapps`, as WAR and/or unpacked folder. With the Tomcat Manager
   set up (a user with the `manager-script` role in `conf/tomcat-users.xml`), each webapp shows
   whether it is running and can be started, stopped and reloaded in place. Without it, a

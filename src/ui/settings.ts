@@ -1,6 +1,6 @@
 import type { DesktopBridge } from '../desktop/preload';
 import type { ChromeSetup } from '../server/chrome-launch';
-import type { Config, FieldError } from '../server/config';
+import type { Config, FieldError, StartCommand } from '../server/config';
 import { chromeArgs, chromeCommandLines, typicalChromePath } from '../shared/chrome-command';
 import type { HubStatus } from '../shared/types';
 import { CHROME_LAUNCH_EVENT, chromeButton, chromeLaunchNote } from './chrome';
@@ -125,7 +125,7 @@ function showErrors(errors: FieldError[]): void {
 let uid = 0;
 const nextId = () => `s-${++uid}`;
 
-function field(path: string | null, label: string, control: HTMLElement, help?: Child): HTMLElement {
+function field(path: string | null, label: string, control: HTMLElement, help?: Child, opts: { wide?: boolean } = {}): HTMLElement {
   const err = h('div', { class: 'field-error', role: 'alert' });
   const target = control.matches('input, select') ? control : control.querySelector<HTMLElement>('input:not([type=checkbox]), select');
   let labelEl: HTMLElement;
@@ -138,7 +138,7 @@ function field(path: string | null, label: string, control: HTMLElement, help?: 
   }
   const el = h(
     'div',
-    { class: 'field' },
+    { class: `field${opts.wide ? ' wide' : ''}` },
     h('div', { class: 'field-label' }, labelEl, help ? h('div', { class: 'field-help' }, help) : null),
     h('div', { class: 'field-control' }, control, err),
   );
@@ -729,7 +729,7 @@ function sections(): SectionDef[] {
       id: 'tomcat-management',
       nav: 'Tomcat server',
       title: 'Tomcat server',
-      desc: 'For the Tomcat page: starting and stopping Tomcat and its webapps, disabling webapps, and deploying the WARs you build.',
+      desc: 'For the Tomcat page: starting and stopping Tomcat (with the rest of your dev setup) and its webapps, disabling webapps, and deploying the WARs you build.',
       fields: tomcatManagementFields,
     },
     {
@@ -815,6 +815,116 @@ function sections(): SectionDef[] {
   ];
 }
 
+/**
+ * The start commands: rows of name, command, folder and "wait", in the order they run. Errors
+ * come back as tomcat.startCommands.<i>.command and so on, and land beside that input.
+ */
+function startCommandsEditor(): HTMLElement {
+  const path = 'tomcat.startCommands';
+  const rowsEl = h('div', { class: 'list-rows' });
+  const add = h('button', { type: 'button', class: 'btn btn-ghost list-add' }, '+ Add command');
+  const values = (): StartCommand[] => structuredClone(getPath(path) ?? []);
+  const setField = (i: number, key: keyof StartCommand, value: string | boolean) => {
+    const arr = values();
+    arr[i] = { ...arr[i], [key]: value };
+    change(path, arr);
+    clearError(`${path}.${i}.${key}`);
+    clearError(`${path}.${i}`);
+  };
+
+  /** One input with its own error slot. */
+  const part = (i: number, key: 'name' | 'command' | 'cwd', label: string, placeholder: string, mono: boolean): HTMLElement => {
+    const input = h('input', { type: 'text', class: `input${mono ? ' mono' : ''}`, placeholder, spellcheck: 'false', autocomplete: 'off', 'aria-label': `${label} of command ${i + 1}` }) as HTMLInputElement;
+    input.value = String(values()[i]?.[key] ?? '');
+    input.addEventListener('input', () => setField(i, key, input.value));
+    const err = h('div', { class: 'field-error', role: 'alert' });
+    S.errorSlots.set(`${path}.${i}.${key}`, err);
+    const browse =
+      key === 'cwd'
+        ? browseButton('folder', 'Choose the folder to run the command in', () => input.value, (picked) => {
+            input.value = picked;
+            setField(i, key, picked);
+          })
+        : null;
+    return h('div', { class: 'list-row' }, browse ? h('div', { class: 'input-row' }, input, browse) : input, err);
+  };
+
+  const row = (c: StartCommand, i: number, count: number): HTMLElement => {
+    const tool = (label: string, title: string, disabled: boolean, fn: () => void) => {
+      const b = h('button', { type: 'button', class: 'btn btn-icon btn-ghost', title, 'aria-label': `${title} (command ${i + 1})` }, label) as HTMLButtonElement;
+      b.disabled = disabled;
+      b.addEventListener('click', () => {
+        fn();
+        render();
+      });
+      return b;
+    };
+    const move = (to: number) => {
+      const arr = values();
+      [arr[i], arr[to]] = [arr[to], arr[i]];
+      change(path, arr);
+    };
+    const wait = h('input', { type: 'checkbox' }) as HTMLInputElement;
+    wait.checked = c.wait === true;
+    wait.addEventListener('change', () => setField(i, 'wait', wait.checked));
+    const rowErr = h('div', { class: 'field-error', role: 'alert' });
+    S.errorSlots.set(`${path}.${i}`, rowErr);
+    return h(
+      'div',
+      { class: 'sc-row' },
+      h('div', { class: 'sc-head' },
+        h('span', { class: 'sc-num' }, `${i + 1}`),
+        part(i, 'name', 'Name', 'Database', false),
+        h('div', { class: 'sc-tools' },
+          tool('↑', 'Move up', i === 0, () => move(i - 1)),
+          tool('↓', 'Move down', i === count - 1, () => move(i + 1)),
+          tool('×', 'Remove', false, () => {
+            const arr = values();
+            arr.splice(i, 1);
+            change(path, arr);
+          }),
+        ),
+      ),
+      h('div', { class: 'sc-grid' },
+        h('span', { class: 'sc-label' }, 'Command'),
+        part(i, 'command', 'Command', isWindows ? 'net start postgresql-x64-16' : 'pg_ctl -D /usr/local/var/postgres start', true),
+        h('span', { class: 'sc-label' }, 'Folder'),
+        part(i, 'cwd', 'Folder', 'The settings file’s folder', true),
+        h('span', {}),
+        h('label', { class: 'check sc-wait' }, wait, ' Wait for it to finish, and stop if it fails'),
+      ),
+      rowErr,
+    );
+  };
+
+  function render(focusLast = false): void {
+    for (const key of [...S.errorSlots.keys()]) if (key.startsWith(`${path}.`)) S.errorSlots.delete(key);
+    const vals = values();
+    rowsEl.replaceChildren(...(vals.length ? vals.map((c, i) => row(c, i, vals.length)) : [h('div', { class: 'list-empty' }, 'No start commands: Start Tomcat starts just Tomcat.')]));
+    if (focusLast) rowsEl.querySelector<HTMLInputElement>('.sc-row:last-child input')?.focus();
+  }
+  add.addEventListener('click', () => {
+    change(path, [...values(), { name: '', command: '', cwd: '', wait: false }]);
+    render(true);
+  });
+  render();
+  return h('div', { class: 'list' }, rowsEl, add);
+}
+
+/** The Tomcat folder, with the folder it falls back to shown as the placeholder. */
+function tomcatHomeInput(): HTMLElement {
+  const el = folderInput('tomcat.home', 'Choose the folder Tomcat is installed in');
+  const input = el.querySelector('input')!;
+  const update = () => {
+    const webapps = String(getPath('tomcat.webappsDir') ?? '').trim().replace(/[\\/]+$/, '');
+    const above = webapps.replace(/[\\/][^\\/]*$/, '');
+    input.placeholder = above && above !== webapps ? `The folder above webapps: ${above}` : '';
+  };
+  update();
+  S.derived.push(update);
+  return el;
+}
+
 /** Settings for the Tomcat page (src/ui/tomcat.ts). */
 function tomcatManagementFields(): HTMLElement[] {
   const password = textInput('tomcat.manager.password', { mono: true });
@@ -828,12 +938,49 @@ function tomcatManagementFields(): HTMLElement[] {
       'Disable moves a webapp here so Tomcat forgets it; Enable moves it back. Must be outside the webapps folder.',
     ),
     field(
+      'tomcat.home',
+      'Tomcat folder (CATALINA_HOME)',
+      tomcatHomeInput(),
+      h(
+        'span',
+        {},
+        `Without scripts below, Start Tomcat runs its bin/${isWindows ? 'startup.bat' : 'startup.sh'} and Stop its bin/${isWindows ? 'shutdown.bat' : 'shutdown.sh'}, the traditional way, with CATALINA_HOME set to this folder and CATALINA_BASE to the folder above webapps. Leave empty to use the folder above webapps. A start or stop script overrides this.`,
+      ),
+    ),
+    field(
+      'tomcat.javaHome',
+      'Java folder (JAVA_HOME)',
+      folderInput('tomcat.javaHome', 'Choose the Java folder (a JDK or JRE)'),
+      h('span', {}, 'The JDK Tomcat runs on, e.g. ', h('code', {}, isWindows ? 'C:/Program Files/Java/jdk-17' : '/usr/lib/jvm/java-17'), '. Leave empty to use JAVA_HOME from Debug Hub’s environment. Used for Tomcat’s own scripts only; a start or stop script sets its own.'),
+    ),
+    field(
       'tomcat.startScript',
       'Start script',
-      fileInput('tomcat.startScript', 'Choose the script that starts Tomcat', isWindows ? 'C:/tomcat/bin/startup.bat' : '/opt/tomcat/bin/startup.sh'),
-      'Run by Start Tomcat, in its own folder. Your own script is fine; it may also keep Tomcat in the foreground.',
+      fileInput('tomcat.startScript', 'Choose the script that starts Tomcat', 'Tomcat’s own startup'),
+      'Optional. Run by Start Tomcat instead of Tomcat’s startup, in its own folder. It may also keep Tomcat in the foreground.',
     ),
-    field('tomcat.stopScript', 'Stop script', fileInput('tomcat.stopScript', 'Choose the script that stops Tomcat', isWindows ? 'C:/tomcat/bin/shutdown.bat' : '/opt/tomcat/bin/shutdown.sh'), 'Run by Stop Tomcat.'),
+    field('tomcat.stopScript', 'Stop script', fileInput('tomcat.stopScript', 'Choose the script that stops Tomcat', 'Tomcat’s own shutdown'), 'Optional. Run by Stop Tomcat instead of Tomcat’s shutdown.'),
+    field(
+      'tomcat.startCommands',
+      'Start commands',
+      startCommandsEditor(),
+      h(
+        'span',
+        {},
+        'Bring up the whole dev setup with Start Tomcat: these run first, in this order, then Tomcat, then Chrome if it is on below. Each runs in the system shell and keeps running after Debug Hub closes; its output goes on the timeline. Tick “wait” for a step Tomcat needs finished first, e.g. ',
+        h('code', {}, isWindows ? 'net start postgresql-x64-16' : 'pg_ctl start -D /usr/local/var/postgres'),
+        ' (up to 5 minutes; if it fails, Tomcat is not started). Leave it off for what keeps running, e.g. ',
+        h('code', {}, 'npm run dev'),
+        ' in your web project’s folder. A command still running from an earlier Start is not started twice.',
+      ),
+      { wide: true },
+    ),
+    field(
+      'tomcat.startChrome',
+      'Also start Chrome',
+      toggle('tomcat.startChrome', 'Also start Chrome'),
+      'After Tomcat, start Chrome with its debugging port, like Start Chrome under Browser. Left alone if it is already running.',
+    ),
     field(
       'tomcat.manager.url',
       'Manager URL',
