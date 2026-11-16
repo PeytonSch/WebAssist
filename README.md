@@ -77,8 +77,10 @@ written with forward slashes or pasted as they are (`C:\Users\me\logs`).
 | `chrome.captureBodies` | `true` | Capture text and JSON response bodies. |
 | `chrome.bodyResourceTypes` | `XHR, Fetch, Document` | Resource types whose bodies are captured. |
 | `tomcat.enabled` | `false` | Turn on the Tomcat collectors. |
-| `tomcat.appLogs` | `[]` | Application logs. `*` is allowed in the file name. |
-| `tomcat.accessLogs` | `[]` | Access logs. |
+| `tomcat.logsDir` | (empty) | A Tomcat logs folder, usually `CATALINA_BASE/logs`. Every log in it is followed; see below. |
+| `tomcat.appLogs` | `[]` | Application logs outside the logs folder. `*` is allowed in the file name. |
+| `tomcat.accessLogs` | `[]` | Access logs outside the logs folder. |
+| `tomcat.webappsDir`, `tomcat.disabledDir` | (empty) | Webapp folders. Their contents are the webapp names used to label events. |
 | `tomcat.accessDurationUnit` | `ms` | Unit of `%D`: `ms` up to Tomcat 9, `us` from Tomcat 10. |
 | `postgres.enabled`, `postgres.logs` | `false`, `[]` | Postgres server logs. |
 | `tail.fromStart` | `false` | Read existing log content at startup, not only new lines. |
@@ -96,9 +98,27 @@ console messages, uncaught exceptions, and requests with status, timing, headers
 New tabs are attached as they open. If Chrome restarts, the hub reconnects within about a
 second. The hub's own UI tab is skipped.
 
+**Tomcat logs folder.** With `tomcat.logsDir` set, every file in the folder is followed:
+names containing `access_log` as access logs, everything else as application logs, and files
+that appear later (the next day's logs) as they appear. Compressed archives and lock files are
+skipped, and a file also listed under `appLogs` or `accessLogs` is left to that list. Old
+rotated files cost almost nothing: files not written for an hour are only checked every few
+seconds, and even with `tail.fromStart` files older than a day are not replayed.
+
 **Tomcat application logs.** Follows the files, including date-rotated ones and truncation.
-A line without a leading timestamp is treated as a continuation, so a stack trace is one
-event. Understands the Tomcat JUL layout and common Logback, Log4j2 and Spring Boot layouts.
+A line that starts with neither a timestamp nor a level is treated as a continuation, so a
+stack trace is one event. Understands the Tomcat JUL layout, JUL's two-line default layout,
+and common Logback, Log4j, Log4j2 and Spring Boot layouts, including level-first lines without
+a timestamp (`DEBUG com.example.Foo - …`) that console appenders write into `catalina.out`.
+
+**Webapp labels.** Each Tomcat log entry and access-log request is labelled with the webapp it
+came from, where that can be told: by the log file's name (`shop.2026-11-16.log` is `shop`;
+Tomcat's own `catalina`, `localhost` and `manager` logs name no webapp), by Tomcat's context
+markers in the message (`in context with path [/shop]`, `Deploying web application directory
+[…/webapps/shop]`), and for requests by their context path. Request paths are only matched
+against webapps the hub knows: the contents of `tomcat.webappsDir` and `tomcat.disabledDir`
+(or the `webapps` folder next to the logs folder), plus names seen in log file names and
+deployment messages. `ROOT` is the `/` app.
 
 **Tomcat access logs.** Parses the common pattern, and the extended pattern in
 `docs/correlation.md` that adds duration and the request ID.
@@ -110,7 +130,11 @@ into the error above them.
 ## Using the timeline
 
 - Filter by source, level and kind; shift-click a filter to show only that one. Search matches
-  URLs, messages, bodies and request IDs.
+  URLs, messages, bodies, request IDs and webapp names.
+- Tomcat rows show their webapp next to the event. Once there are labelled events, a Webapp
+  filter appears (a menu when there are more than three choices) that hides Tomcat events of
+  webapps you are not working on; "No webapp" covers Tomcat events without a label. It does not
+  affect browser or Postgres events, and is saved with filter presets.
 - "Hide assets" hides scripts, styles, images and fonts unless they failed.
 - Select a row for details. For a browser request the panel shows the server events that
   share its request ID, or, when there is no ID, events matched by path and time (labelled as

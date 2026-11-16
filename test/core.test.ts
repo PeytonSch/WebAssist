@@ -1,4 +1,4 @@
-import { appendFileSync, mkdtempSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdtempSync, renameSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -110,6 +110,51 @@ describe('Tailer', () => {
     writeFileSync(f, 'after rotate, and longer than before\n');
     await t.tick(true);
     expect(lines).toEqual(['after truncate', 'after rotate, and longer than before']);
+  });
+  it('follows only the files a source accepts', async () => {
+    writeFileSync(join(dir, 'a.log'), '');
+    writeFileSync(join(dir, 'b.log.gz'), '');
+    const t = new Tailer([{ pattern: join(dir, '*'), accept: (f) => !f.endsWith('.gz') }], { fromStart: false, pollMs: 10_000, onLine: () => {} });
+    await t.tick(true);
+    expect(t.watched).toEqual([join(dir, 'a.log')]);
+  });
+  it('does not replay old files from a folder source, even when reading from the start', async () => {
+    writeFileSync(join(dir, 'today.log'), 'today\n');
+    writeFileSync(join(dir, 'last-month.log'), 'old\n');
+    const old = new Date(Date.now() - 30 * 86_400_000);
+    utimesSync(join(dir, 'last-month.log'), old, old);
+    const t = new Tailer([{ pattern: join(dir, '*.log'), historyMaxAgeMs: 86_400_000 }], { fromStart: true, pollMs: 10_000, onLine: (_f, l) => lines.push(l) });
+    await t.tick(true);
+    expect(lines).toEqual(['today']);
+    expect(t.watched).toHaveLength(2);
+  });
+  it('keeps the read position of a file renamed by rotation when the new name is also followed', async () => {
+    const f = join(dir, 'shop.log');
+    writeFileSync(f, 'before start\n');
+    const t = make(['shop*.log']);
+    await t.tick(true);
+    appendFileSync(f, 'one\n');
+    await t.tick();
+    appendFileSync(f, 'two\n');
+    renameSync(f, join(dir, 'shop.2026-11-15.log'));
+    writeFileSync(f, 'three\n');
+    await t.tick(true);
+    await t.tick(true);
+    expect(lines.sort()).toEqual(['one', 'three', 'two']);
+  });
+  it('checks files that have not been written for an hour less often', async () => {
+    const f = join(dir, 'old.log');
+    writeFileSync(f, '');
+    const old = new Date(Date.now() - 2 * 3_600_000);
+    utimesSync(f, old, old);
+    const t = make(['old.log']);
+    await t.tick(true);
+    appendFileSync(f, 'woke up\n');
+    utimesSync(f, old, old);
+    await t.tick();
+    expect(lines).toEqual([]);
+    await t.tick(true);
+    expect(lines).toEqual(['woke up']);
   });
 });
 

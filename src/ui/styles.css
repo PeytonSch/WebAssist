@@ -340,6 +340,25 @@ select:focus-visible, .btn:focus-visible, .chip:focus-visible, input:focus-visib
 .chip.off .label { text-decoration: line-through; text-decoration-color: var(--border-strong); }
 
 .divider { width: 1px; height: 20px; background: var(--border); flex: none; }
+/* The webapp chips, in a menu once there are too many for the bar. */
+.chip.filtered { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
+.chip .caret { color: var(--muted); font-size: 10px; }
+.menu {
+  position: fixed;
+  z-index: 20;
+  max-width: min(560px, calc(100vw - 16px));
+  max-height: 60vh;
+  overflow-y: auto;
+  padding: 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: 0 12px 32px rgba(16, 24, 40, 0.16);
+}
+.menu .chips { flex-wrap: wrap; }
+.menu-foot { display: flex; justify-content: space-between; gap: 12px; margin-top: 8px; color: var(--muted); font-size: 11.5px; }
+/* Names the Webapp chip group, whose chips are app names and would otherwise read as kinds. */
+.chips-label { align-self: center; margin-right: 2px; color: var(--muted); font-size: 11px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; }
 
 .check {
   display: inline-flex;
@@ -481,6 +500,19 @@ main {
   letter-spacing: 0.04em;
 }
 .method { flex: none; font: 600 12px var(--mono); color: var(--text-2); }
+/* The webapp a Tomcat event came from, between the kind and the event text. */
+.webapp {
+  flex: none;
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 0 6px;
+  border: 1px solid color-mix(in srgb, var(--tomcat) 35%, transparent);
+  border-radius: 4px;
+  color: var(--tomcat);
+  font: 500 11px/17px var(--mono);
+}
 .text {
   min-width: 0;
   overflow: hidden;

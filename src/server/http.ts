@@ -3,6 +3,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { dirname, extname, isAbsolute, join, normalize, resolve, sep } from 'node:path';
 import { WebSocketServer, type WebSocket } from 'ws';
 import type { HubEvent, ServerMessage } from '../shared/types';
+import { scanLogsFolder } from './collectors/logsdir';
 import { matchPattern } from './collectors/tail';
 import { editableConfig, resolvePaths, saveConfig, validateConfig } from './config';
 import type { Hub } from './hub';
@@ -119,6 +120,19 @@ export function startServer(hub: Hub, uiDir: string, opts: ServerOptions): Promi
           }),
         );
         return json(res, 200, results);
+      }
+
+      // What following a Tomcat logs folder would pick up, for the preview under that setting.
+      if (path === '/api/config/logs-folder' && req.method === 'POST') {
+        const body = JSON.parse((await readBody(req)) || '{}');
+        const abs = (p: unknown) => {
+          const s = String(p ?? '').trim();
+          return s && (isAbsolute(s) ? s : resolve(configDir, s));
+        };
+        const dir = abs(body.dir);
+        if (!dir) return json(res, 200, null);
+        const lists = (v: unknown) => (Array.isArray(v) ? v.slice(0, 50).map(abs).filter(Boolean) : []);
+        return json(res, 200, await scanLogsFolder(dir, lists(body.appLogs), lists(body.accessLogs)));
       }
 
       if (path === '/api/markers' && req.method === 'POST') {

@@ -22,7 +22,10 @@ interface Row {
 
 interface Filters {
   q: string;
-  /** Disabled facets, e.g. "source:tomcat", "level:debug", "group:console". */
+  /**
+   * Disabled facets, e.g. "source:tomcat", "level:debug", "group:console", "webapp:shop".
+   * "webapp:" (no name) stands for Tomcat events whose webapp is not known.
+   */
   off: string[];
   hideStatic: boolean;
 }
@@ -46,6 +49,7 @@ const GROUPS = [
   ['log', 'Logs'],
   ['query', 'Queries'],
 ] as const;
+const NO_WEBAPP = 'webapp:';
 const DEFAULT_FILTERS: Filters = { q: '', off: [], hideStatic: true };
 const BUILT_IN: Preset[] = [
   { name: 'Errors and warnings', q: '', off: ['level:info', 'level:debug'], hideStatic: true },
@@ -94,6 +98,8 @@ const state = {
   byNet: new Map<string, Row>(),
   seen: new Set<string>(),
   counts: { error: 0, warn: 0, info: 0, debug: 0 } as Record<Level, number>,
+  /** Tomcat events per webapp label seen in this session; '' counts the unlabelled ones. */
+  webapps: new Map<string, number>(),
   selected: null as Row | null,
   relatedKeys: new Set<string>(),
   follow: true,
@@ -126,6 +132,8 @@ const statusOf = (r: Row): number | null => resOf(r)?.data.status ?? r.ev.data.s
 const durationOf = (r: Row): number | null => resOf(r)?.data.durationMs ?? r.ev.data.durationMs ?? null;
 const failedOf = (r: Row): boolean => !!resOf(r)?.data.failed;
 const typeOf = (r: Row): string => resOf(r)?.data.resourceType ?? r.ev.data.resourceType ?? '';
+/** The webapp a Tomcat event came from: '' when not known, null for other sources. */
+const webappOf = (r: Row): string | null => (r.ev.source === 'tomcat' ? r.ev.data.webapp ?? '' : null);
 const isStatic = (r: Row) => r.ev.source === 'browser' && groupOf(r) === 'network' && STATIC_TYPES.has(typeOf(r));
 
 function hay(r: Row): string {
@@ -134,7 +142,7 @@ function hay(r: Row): string {
     const rd = r.res?.data ?? {};
     r.hay = [
       r.ev.summary, r.res?.summary, ridOf(r), d.url, d.message, d.text, d.body, rd.body,
-      r.ev.source, r.ev.kind, statusOf(r), rd.errorText,
+      r.ev.source, r.ev.kind, statusOf(r), rd.errorText, d.webapp,
     ].filter((x) => x != null && x !== '').join('\n').toLowerCase();
   }
   return r.hay;
@@ -189,6 +197,8 @@ function ingest(events: HubEvent[], bulk = false): void {
       }
     }
     const row: Row = { key: ev.id, t, ev };
+    const app = webappOf(row);
+    if (app !== null) state.webapps.set(app, (state.webapps.get(app) ?? 0) + 1);
     if (ev.kind === 'response') row.tEnd = t;
     if (ev.source === 'tomcat' && ev.kind === 'request' && ev.data.durationMs != null) row.tEnd = t + ev.data.durationMs;
     if (netId && (ev.kind === 'request' || ev.kind === 'response')) state.byNet.set(netId, row);
@@ -210,6 +220,7 @@ function resetRows(): void {
   state.byKey.clear();
   state.byNet.clear();
   state.seen.clear();
+  state.webapps.clear();
   state.selected = null;
   state.relatedKeys.clear();
   renderDetail();
@@ -222,6 +233,9 @@ function passes(r: Row, off: Set<string>, terms: string[]): boolean {
   if (g !== 'marker') {
     const lvl = levelOf(r);
     if (off.has(`source:${r.ev.source}`) || off.has(`level:${lvl}`) || off.has(`group:${g}`)) return false;
+    // Only Tomcat events have a webapp; the webapp filter leaves everything else alone.
+    const app = webappOf(r);
+    if (app !== null && off.has(`webapp:${app}`)) return false;
     if (state.filters.hideStatic && RANK[lvl] < RANK.warn && isStatic(r)) return false;
   }
   if (terms.length) {
@@ -311,6 +325,7 @@ function mainCell(r: Row): Child[] {
     const text = r.ev.source === 'browser' ? r.ev.summary.replace(/^\S+\s/, '').replace(/ [→✕] .*$/, '') : d.path;
     return [
       h('span', { class: 'kind' }, r.ev.source === 'browser' ? (typeOf(r) || 'net').toLowerCase() : 'access'),
+      webappTag(r),
       h('span', { class: 'method' }, d.method ?? ''),
       h('span', { class: 'text' }, text),
       ridOf(r) &&
@@ -320,9 +335,16 @@ function mainCell(r: Row): Child[] {
   const kind = g === 'console' ? (r.ev.data.type === 'exception' ? 'throw' : 'console') : g;
   return [
     h('span', { class: 'kind' }, kind),
+    webappTag(r),
     h('span', { class: 'text' }, r.ev.summary),
     ridOf(r) && h('span', { class: 'linked', title: `Request ID ${ridOf(r)}` }, linkIcon()),
   ];
+}
+
+/** A small label naming the webapp a Tomcat event came from. */
+function webappTag(r: Row): HTMLElement | null {
+  const app = webappOf(r);
+  return app ? h('span', { class: 'webapp', title: `Webapp: ${app}` }, app) : null;
 }
 
 function linkIcon(): Node {
@@ -436,6 +458,81 @@ function renderChips(): void {
   })));
   const gr = GROUPS.map(([id]) => `group:${id}`);
   build($('f-group'), gr, GROUPS.map(([id, label]) => ({ facet: `group:${id}`, label })));
+  renderWebappChips(build, off);
+}
+
+/** Above this many choices the webapp chips move into a menu, so the filter bar keeps its room. */
+const WEBAPP_INLINE_MAX = 3;
+const webappMenu = $('webapp-menu');
+
+/**
+ * One chip per webapp seen in this session, plus one for Tomcat events with no known webapp.
+ * Webapps hidden by a saved filter keep their chip even before they log anything, so they can
+ * be shown again. The group only appears once there is a webapp to choose.
+ */
+function renderWebappChips(
+  build: (host: HTMLElement, family: string[], items: { facet: string; label: string; n?: number }[]) => void,
+  off: Set<string>,
+): void {
+  const names = new Set([...state.webapps.keys()].filter(Boolean));
+  for (const f of off) if (f.startsWith('webapp:') && f !== NO_WEBAPP) names.add(f.slice('webapp:'.length));
+  const host = $('f-webapp');
+  // Also shown while unlabelled events are hidden, or nothing could show them again.
+  const show = names.size > 0 || off.has(NO_WEBAPP);
+  host.hidden = !show;
+  $('f-webapp-divider').hidden = !show;
+  if (!show) {
+    closeWebappMenu();
+    return host.replaceChildren();
+  }
+  const items = [...names]
+    .sort((a, b) => a.localeCompare(b))
+    .map((name) => ({ facet: `webapp:${name}`, label: name, n: state.webapps.get(name) ?? 0 }));
+  if (state.webapps.get('') || off.has(NO_WEBAPP)) items.push({ facet: NO_WEBAPP, label: 'No webapp', n: state.webapps.get('') ?? 0 });
+  const family = items.map((it) => it.facet);
+  const label = h('span', { class: 'chips-label', title: 'Tomcat events by webapp. Other sources are not affected.' }, 'Webapp');
+
+  if (items.length <= WEBAPP_INLINE_MAX) {
+    closeWebappMenu();
+    build(host, family, items);
+    host.prepend(label);
+    return;
+  }
+  const hidden = items.filter((it) => off.has(it.facet)).length;
+  const open = !webappMenu.hidden;
+  const toggle = h('button', { class: `chip${hidden ? ' filtered' : ''}`, type: 'button', 'aria-haspopup': 'true', 'aria-expanded': String(open), title: 'Choose which webapps’ Tomcat events to show' },
+    h('span', { class: 'label' }, hidden ? `${items.length - hidden} of ${items.length}` : `All ${items.length}`),
+    h('span', { class: 'caret', 'aria-hidden': 'true' }, '▾'));
+  toggle.onclick = (e) => {
+    e.stopPropagation();
+    if (webappMenu.hidden) openWebappMenu(toggle);
+    else closeWebappMenu();
+  };
+  host.replaceChildren(label, toggle);
+  const chips = h('div', { class: 'chips', role: 'group', 'aria-label': 'Webapp' });
+  build(chips, family, items);
+  const all = h('button', { class: 'link', type: 'button' }, 'Show all');
+  all.onclick = () => setFilters({ off: state.filters.off.filter((f) => !f.startsWith('webapp:')) });
+  webappMenu.replaceChildren(chips, h('div', { class: 'menu-foot' }, h('span', {}, 'Shift-click to show only one'), hidden ? all : null));
+  if (open) placeWebappMenu(toggle);
+}
+
+function placeWebappMenu(anchor: HTMLElement): void {
+  const r = anchor.getBoundingClientRect();
+  webappMenu.style.top = `${r.bottom + 6}px`;
+  webappMenu.style.left = `${Math.max(8, Math.min(r.left, window.innerWidth - webappMenu.offsetWidth - 8))}px`;
+}
+
+function openWebappMenu(anchor: HTMLElement): void {
+  webappMenu.hidden = false;
+  anchor.setAttribute('aria-expanded', 'true');
+  placeWebappMenu(anchor);
+}
+
+function closeWebappMenu(): void {
+  if (webappMenu.hidden) return;
+  webappMenu.hidden = true;
+  $('f-webapp').querySelector('[aria-expanded]')?.setAttribute('aria-expanded', 'false');
 }
 
 // ── Selection ───────────────────────────────────────────
@@ -597,6 +694,7 @@ function relCard(r: Row): HTMLElement {
     h('div', { class: 'rel-head' },
       h('span', { class: 'c-time' }, clock(r.ev.ts)),
       sourceBadge(r.ev.source),
+      webappTag(r),
       h('span', { class: 'text' }, r.ev.summary),
       statusPill(r),
     ));
@@ -689,7 +787,7 @@ function renderDetail(): void {
     ])));
   } else if (g === 'network') {
     add(section('Access log', facts([
-      ['Path', d.path], ['Method', d.method], ['Status', d.status], ['Duration', fmtDuration(d.durationMs)],
+      ['Webapp', d.webapp], ['Path', d.path], ['Method', d.method], ['Status', d.status], ['Duration', fmtDuration(d.durationMs)],
       ['Bytes', fmtBytes(d.bytes)], ['Remote', d.remote], ['Request ID', ridOf(row)], ['File', d.file],
     ])));
   } else if (g === 'console') {
@@ -698,7 +796,7 @@ function renderDetail(): void {
     ])));
   } else if (g === 'log') {
     add(section('Log entry', facts([
-      ['Exception', d.exception], ['Root cause', d.rootCause !== d.exception ? d.rootCause : null],
+      ['Webapp', d.webapp], ['Exception', d.exception], ['Root cause', d.rootCause !== d.exception ? d.rootCause : null],
       ['Thread', d.thread], ['Severity', d.severity], ['Request ID', ridOf(row)], ['File', d.file],
     ])));
   } else if (g === 'query') {
@@ -965,6 +1063,17 @@ function init(): void {
     clearTimeout(qTimer);
     qTimer = window.setTimeout(() => setFilters({ q: $<HTMLInputElement>('q').value }), 120);
   });
+  // The webapp menu closes on a click elsewhere, Escape, or when the window changes size.
+  document.addEventListener('click', (e) => {
+    if (!webappMenu.hidden && !webappMenu.contains(e.target as Node)) closeWebappMenu();
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !webappMenu.hidden) {
+      e.stopImmediatePropagation();
+      closeWebappMenu();
+    }
+  }, true);
+  window.addEventListener('resize', closeWebappMenu);
   $('f-static').addEventListener('change', () => setFilters({ hideStatic: $<HTMLInputElement>('f-static').checked }));
   $('presets').addEventListener('change', () => void onPresetChange());
   $('session').addEventListener('change', () => void openSession($<HTMLSelectElement>('session').value));
