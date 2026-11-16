@@ -26,6 +26,13 @@
   --hub: #6d28d9;
   --hub-soft: #f4f0ff;
   --shadow: 0 1px 2px rgba(16, 24, 40, 0.05);
+  /* Syntax colours for logs, SQL, plans and bodies in the detail panel (see highlight.ts). */
+  --syn-kw: #7c3aed;
+  --syn-str: #15803d;
+  --syn-num: #0e7490;
+  --syn-key: #1d4ed8;
+  --syn-id: #a21caf;
+  --syn-info: #067647;
   --sans: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
   --mono: "JetBrains Mono", ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
   color-scheme: light;
@@ -59,6 +66,12 @@
   --hub: #bda4ff;
   --hub-soft: #231a3d;
   --shadow: none;
+  --syn-kw: #c4a5ff;
+  --syn-str: #86dfa8;
+  --syn-num: #67d4e8;
+  --syn-key: #93b4ff;
+  --syn-id: #f0a6f7;
+  --syn-info: #47cd89;
   color-scheme: dark;
 }
 
@@ -676,8 +689,24 @@ pre.code {
   font-variant-ligatures: none;
 }
 pre.code.nowrap { white-space: pre; overflow-wrap: normal; }
-pre.code .frame { color: var(--muted); }
-pre.code .cause { color: var(--error); font-weight: 600; }
+
+/* Syntax highlighting. Spans come from highlight.ts; classes are named hl-<token class>. */
+.hl-kw, .hl-node, .hl-tag { color: var(--syn-kw); }
+.hl-node { font-weight: 600; }
+.hl-str { color: var(--syn-str); }
+.hl-num { color: var(--syn-num); }
+.hl-key, .hl-attr, .hl-label, .hl-logger, .hl-ident, .hl-param { color: var(--syn-key); }
+.hl-id { color: var(--syn-id); }
+.hl-url, .hl-loc { color: var(--accent); }
+.hl-com { color: var(--muted); font-style: italic; }
+.hl-dim, .hl-punc, .hl-time { color: var(--muted); }
+.hl-thread { color: var(--text-2); }
+.hl-fn { color: var(--text); font-weight: 600; }
+.hl-err, .hl-exc, .hl-cause { color: var(--error); font-weight: 600; }
+.hl-msg { color: var(--text); font-weight: 500; }
+.hl-warn { color: var(--warn); font-weight: 600; }
+.hl-info { color: var(--syn-info); font-weight: 600; }
+.hl-debug { color: var(--muted); font-weight: 600; }
 
 .notice {
   margin-top: 6px;
