@@ -86,3 +86,45 @@ export interface TomcatState {
 }
 
 export type WebappAction = 'start' | 'stop' | 'reload' | 'disable' | 'enable';
+
+export type AppFolder = 'webapps' | 'disabled';
+
+/** One thing Delete removes from the webapps or disabled folder. */
+export interface DeleteItem {
+  /** Its name in the folder: "shop.war" or "shop". */
+  name: string;
+  path: string;
+  /** A link (or Windows junction) is removed as a link; what it points to is left alone. */
+  kind: 'war' | 'folder' | 'link';
+  bytes: number;
+  files: number;
+  /** The folder was too big to count completely; there is at least this much. */
+  partial: boolean;
+}
+
+/** Where the files kept on a deploy are read from: the copy of the webapp being replaced. */
+export interface KeepSource {
+  kind: 'folder' | 'war';
+  path: string;
+  where: AppFolder;
+}
+
+export interface KeptFile {
+  /** Relative to the webapp, with forward slashes, e.g. "WEB-INF/classes/config.yaml". */
+  path: string;
+  bytes: number;
+  /** The new WAR has a file there, which the kept one replaces; otherwise it is added. Null if not known. */
+  inWar?: boolean | null;
+}
+
+/** GET /api/tomcat/keep: what a deploy could keep from the copy it replaces. */
+export interface KeepPreview {
+  /** File names (with *) from Settings › Tomcat. */
+  patterns: string[];
+  source: KeepSource | null;
+  files: KeptFile[];
+  /** The search stopped early: there may be more. */
+  truncated: boolean;
+  /** Why files cannot be kept, e.g. the new WAR is a ZIP64 archive. */
+  problem: string | null;
+}

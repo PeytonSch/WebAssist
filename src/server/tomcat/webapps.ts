@@ -230,7 +230,13 @@ export interface DeployResult {
  * the point (Tomcat redeploys it); replacing a folder deployed without a WAR is not, because
  * Tomcat would go on serving the folder.
  */
-export async function deployWar(src: string, webappsDir: string, name: string): Promise<DeployResult> {
+export async function deployWar(
+  src: string,
+  webappsDir: string,
+  name: string,
+  /** Writes the WAR to the temporary file instead of a plain copy, e.g. with kept files added. */
+  write?: (tmp: string) => Promise<void>,
+): Promise<DeployResult> {
   const problem = checkName(name);
   if (problem) throw new TomcatError(problem);
   const dirSt = await statOrNull(webappsDir);
@@ -249,10 +255,13 @@ export async function deployWar(src: string, webappsDir: string, name: string): 
 
   const tmp = join(webappsDir, tempWarName(name));
   try {
-    await fs.copyFile(src, tmp);
-    // The build may still have been writing; a short copy would deploy a broken WAR.
-    const [a, b] = await Promise.all([fs.stat(src), fs.stat(tmp)]);
-    if (a.size !== b.size) throw new TomcatError(`${basename(src)} changed while it was copied. Try again once the build has finished.`, 409);
+    if (write) await write(tmp);
+    else {
+      await fs.copyFile(src, tmp);
+      // The build may still have been writing; a short copy would deploy a broken WAR.
+      const [a, b] = await Promise.all([fs.stat(src), fs.stat(tmp)]);
+      if (a.size !== b.size) throw new TomcatError(`${basename(src)} changed while it was copied. Try again once the build has finished.`, 409);
+    }
     // A fresh time, so Tomcat sees a change even when deploying an older build.
     const now = new Date();
     await fs.utimes(tmp, now, now);
