@@ -40,7 +40,7 @@ const CHUNK = 256 * 1024;
 const STALE_AFTER_MS = 60 * 60_000;
 const STALE_POLL_MS = 2000;
 
-function globToRegExp(pattern: string): RegExp {
+export function globToRegExp(pattern: string): RegExp {
   const escaped = pattern.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.');
   // Windows file names are case-insensitive, so a pattern typed in another case still matches.
   return new RegExp(`^${escaped}$`, process.platform === 'win32' ? 'i' : '');
