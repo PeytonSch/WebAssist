@@ -12,17 +12,23 @@ type Listener = {
 
 /** Wires collectors to the session store and to whoever is listening (the web UI). */
 export class Hub {
-  readonly store: SessionStore;
+  store: SessionStore;
   private chrome: ChromeCollector | null = null;
   private logs: LogFileCollector[] = [];
   private listeners = new Set<Listener>();
+  private started = false;
 
-  constructor(readonly cfg: Config) {
+  constructor(public cfg: Config) {
     this.store = new SessionStore(cfg.sessionsDir);
-    const emit = (ev: HubEvent) => this.emit(ev);
-    const onStatus = () => this.listeners.forEach((l) => l.onStatus());
+    this.build();
+  }
 
-    if (cfg.chrome.enabled) this.chrome = new ChromeCollector(cfg, emit, onStatus);
+  private build(): void {
+    const cfg = this.cfg;
+    const emit = (ev: HubEvent) => this.emit(ev);
+    const onStatus = () => this.notifyStatus();
+    this.chrome = cfg.chrome.enabled ? new ChromeCollector(cfg, emit, onStatus) : null;
+    this.logs = [];
     if (cfg.tomcat.enabled) {
       if (cfg.tomcat.appLogs.length) {
         this.logs.push(new LogFileCollector('Tomcat logs', 'tomcat', cfg.tomcat.appLogs, cfg, emit, onStatus));
@@ -36,16 +42,50 @@ export class Hub {
     }
   }
 
+  private async stopCollectors(): Promise<void> {
+    this.chrome?.stop();
+    await Promise.all(this.logs.map((l) => l.stop()));
+  }
+
+  private notifyStatus(): void {
+    this.listeners.forEach((l) => l.onStatus());
+  }
+
   start(): void {
+    this.started = true;
     this.store.start();
     this.chrome?.start();
     this.logs.forEach((l) => l.start());
   }
 
   async stop(): Promise<void> {
-    this.chrome?.stop();
-    await Promise.all(this.logs.map((l) => l.stop()));
+    this.started = false;
+    await this.stopCollectors();
     await this.store.close();
+  }
+
+  /**
+   * Applies new settings without a restart: the collectors are rebuilt, and recording carries on
+   * in the same session file unless the sessions folder changed. The port cannot change while
+   * the server is listening, so the running one is kept.
+   */
+  async reconfigure(next: Config): Promise<void> {
+    // Created first: a folder that cannot be made throws here, before anything has changed.
+    const store = next.sessionsDir !== this.cfg.sessionsDir ? new SessionStore(next.sessionsDir) : null;
+    await this.stopCollectors();
+    const port = this.cfg.port;
+    if (store) {
+      await this.store.close();
+      this.store = store;
+      if (this.started) store.start();
+    }
+    this.cfg = { ...next, port };
+    this.build();
+    if (this.started) {
+      this.chrome?.start();
+      this.logs.forEach((l) => l.start());
+    }
+    this.notifyStatus();
   }
 
   subscribe(listener: Listener): () => void {
@@ -73,19 +113,19 @@ export class Hub {
   /** Closes the current session file and starts recording into a fresh one. */
   newSession(): string {
     const id = this.store.start();
-    this.listeners.forEach((l) => l.onStatus());
+    this.notifyStatus();
     return id;
   }
 
   status(): HubStatus {
     const off = (name: string, detail: string): CollectorStatus => ({ name, state: 'off', detail });
     const collectors: CollectorStatus[] = [];
-    collectors.push(this.chrome?.status ?? off('Chrome', 'Disabled in config (chrome.enabled)'));
+    collectors.push(this.chrome?.status ?? off('Chrome', 'Turned off in Settings'));
     const tomcat = this.logs.filter((l) => l.status.name.startsWith('Tomcat'));
     if (tomcat.length) collectors.push(...tomcat.map((l) => l.status));
-    else collectors.push(off('Tomcat', 'Set tomcat.enabled and tomcat.appLogs / accessLogs in the config'));
+    else collectors.push(off('Tomcat', 'Turn on Tomcat and add log files in Settings'));
     const pg = this.logs.find((l) => l.status.name === 'Postgres');
-    collectors.push(pg?.status ?? off('Postgres', 'Set postgres.enabled and postgres.logs in the config'));
+    collectors.push(pg?.status ?? off('Postgres', 'Turn on Postgres and add log files in Settings'));
     return {
       session: this.store.id,
       eventCount: this.store.count,

@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, resolve } from 'node:path';
 
 export interface Config {
@@ -67,6 +67,8 @@ export const DEFAULT_CONFIG: Config = {
   },
 };
 
+const isObj = (v: unknown): v is Record<string, any> => !!v && typeof v === 'object' && !Array.isArray(v);
+
 function merge<T>(base: T, over: any): T {
   if (over === undefined || over === null) return base;
   if (Array.isArray(base) || typeof base !== 'object' || base === null) return over as T;
@@ -93,25 +95,175 @@ export interface LoadedConfig {
   file: string | null;
 }
 
-export function loadConfig(explicitPath?: string, cwd = process.cwd()): LoadedConfig {
-  const file = explicitPath ? resolve(cwd, explicitPath) : resolve(cwd, 'debug-hub.config.json');
-  if (!existsSync(file)) {
-    if (explicitPath) throw new Error(`Config file not found: ${file}`);
-    return { config: structuredClone(DEFAULT_CONFIG), file: null };
-  }
+/** Reads a config file as written, without defaults or path resolution. */
+export function readRawConfig(file: string): Record<string, unknown> {
   let raw: unknown;
   try {
     raw = JSON.parse(forgiveBackslashes(readFileSync(file, 'utf8')));
   } catch (err) {
     throw new Error(`Could not parse ${file}: ${(err as Error).message}`);
   }
-  const config = merge(structuredClone(DEFAULT_CONFIG), raw);
-  // Relative paths are relative to the config file, so the hub can be started from anywhere.
-  const base = dirname(file);
+  if (!isObj(raw)) throw new Error(`${file} must contain a JSON object`);
+  return raw;
+}
+
+/** Makes the paths in a config absolute. Relative paths are relative to the config file. */
+export function resolvePaths(config: Config, base: string): Config {
   const abs = (p: string) => (isAbsolute(p) ? p : resolve(base, p));
   config.sessionsDir = abs(config.sessionsDir);
   config.tomcat.appLogs = config.tomcat.appLogs.map(abs);
   config.tomcat.accessLogs = config.tomcat.accessLogs.map(abs);
   config.postgres.logs = config.postgres.logs.map(abs);
-  return { config, file };
+  return config;
+}
+
+export function loadConfig(explicitPath?: string, cwd = process.cwd()): LoadedConfig {
+  const file = explicitPath ? resolve(cwd, explicitPath) : resolve(cwd, 'debug-hub.config.json');
+  if (!existsSync(file)) {
+    if (explicitPath) throw new Error(`Config file not found: ${file}`);
+    return { config: structuredClone(DEFAULT_CONFIG), file: null };
+  }
+  const config = merge(structuredClone(DEFAULT_CONFIG), readRawConfig(file));
+  // Relative paths are relative to the config file, so the hub can be started from anywhere.
+  return { config: resolvePaths(config, dirname(file)), file };
+}
+
+// ── Editing from the settings screen ───────────────────
+
+export interface EditableConfig {
+  /** Where settings are saved. */
+  file: string;
+  /** The settings as written in the file, over the defaults. Paths are not resolved. */
+  config: Config;
+  defaults: Config;
+  /** Set when the file exists but could not be read; saving replaces it. */
+  error: string | null;
+}
+
+export function editableConfig(file: string): EditableConfig {
+  const defaults = structuredClone(DEFAULT_CONFIG);
+  if (!existsSync(file)) return { file, config: structuredClone(DEFAULT_CONFIG), defaults, error: null };
+  try {
+    return { file, config: merge(structuredClone(DEFAULT_CONFIG), readRawConfig(file)), defaults, error: null };
+  } catch (err) {
+    return { file, config: structuredClone(DEFAULT_CONFIG), defaults, error: (err as Error).message };
+  }
+}
+
+export interface FieldError {
+  /** Dotted key, e.g. "chrome.port" or "tomcat.appLogs.1". Empty for the whole form. */
+  path: string;
+  message: string;
+}
+
+/**
+ * Checks settings sent from the settings screen and returns a complete config: defaults filled
+ * in, blank list entries dropped, text trimmed. Unknown keys are kept, so settings added by hand
+ * or by a newer version survive a save.
+ */
+export function validateConfig(input: unknown): { config: Config; errors: FieldError[] } {
+  const errors: FieldError[] = [];
+  if (!isObj(input)) errors.push({ path: '', message: 'Settings must be an object' });
+  const config = merge(structuredClone(DEFAULT_CONFIG), isObj(input) ? input : {});
+  const fmt = (n: number) => n.toLocaleString('en-US');
+
+  const int = (path: string, v: unknown, min: number, max: number, label: string): number => {
+    const n = typeof v === 'string' && v.trim() !== '' ? Number(v) : v;
+    if (typeof n !== 'number' || !Number.isInteger(n) || n < min || n > max) {
+      errors.push({ path, message: `${label} must be a whole number from ${fmt(min)} to ${fmt(max)}` });
+      return typeof n === 'number' && Number.isFinite(n) ? n : min;
+    }
+    return n;
+  };
+  const bool = (path: string, v: unknown): boolean => {
+    if (typeof v !== 'boolean') errors.push({ path, message: 'Must be on or off' });
+    return v === true;
+  };
+  const text = (path: string, v: unknown, label: string): string => {
+    if (typeof v !== 'string') {
+      errors.push({ path, message: `${label} must be text` });
+      return '';
+    }
+    if (!v.trim()) errors.push({ path, message: `${label} is required` });
+    return v.trim();
+  };
+  // Positions in error paths refer to the list as sent, so the screen can mark the right row.
+  const list = (path: string, v: unknown, check?: (s: string) => string | null): string[] => {
+    if (!Array.isArray(v)) {
+      errors.push({ path, message: 'Must be a list' });
+      return [];
+    }
+    const out: string[] = [];
+    v.forEach((item, i) => {
+      if (typeof item !== 'string') return errors.push({ path: `${path}.${i}`, message: 'Must be text' });
+      const s = item.trim();
+      if (!s) return;
+      const problem = check?.(s);
+      if (problem) errors.push({ path: `${path}.${i}`, message: problem });
+      out.push(s);
+    });
+    return out;
+  };
+
+  config.port = int('port', config.port, 1, 65535, 'Port');
+  config.sessionsDir = text('sessionsDir', config.sessionsDir, 'Sessions folder');
+
+  config.chrome.enabled = bool('chrome.enabled', config.chrome.enabled);
+  config.chrome.host = text('chrome.host', config.chrome.host, 'Host');
+  config.chrome.port = int('chrome.port', config.chrome.port, 1, 65535, 'Port');
+  config.chrome.captureBodies = bool('chrome.captureBodies', config.chrome.captureBodies);
+  config.chrome.bodyResourceTypes = list('chrome.bodyResourceTypes', config.chrome.bodyResourceTypes);
+  if (config.chrome.port === config.port && /^(127\.0\.0\.1|localhost)$/.test(config.chrome.host)) {
+    errors.push({ path: 'chrome.port', message: 'Must differ from Debug Hub’s own port' });
+  }
+
+  config.tomcat.enabled = bool('tomcat.enabled', config.tomcat.enabled);
+  config.tomcat.appLogs = list('tomcat.appLogs', config.tomcat.appLogs);
+  config.tomcat.accessLogs = list('tomcat.accessLogs', config.tomcat.accessLogs);
+  if (!['ms', 'us', 's'].includes(config.tomcat.accessDurationUnit)) {
+    errors.push({ path: 'tomcat.accessDurationUnit', message: 'Must be ms, us or s' });
+  }
+
+  config.postgres.enabled = bool('postgres.enabled', config.postgres.enabled);
+  config.postgres.logs = list('postgres.logs', config.postgres.logs);
+
+  config.tail.fromStart = bool('tail.fromStart', config.tail.fromStart);
+  config.tail.pollMs = int('tail.pollMs', config.tail.pollMs, 50, 10_000, 'Poll interval');
+  config.tail.flushMs = int('tail.flushMs', config.tail.flushMs, 10, 10_000, 'Flush delay');
+
+  config.redact.headers = list('redact.headers', config.redact.headers).map((h) => h.toLowerCase());
+  config.maxBodyBytes = int('maxBodyBytes', config.maxBodyBytes, 0, 64 * 1024 * 1024, 'Body limit');
+
+  config.correlation.header = text('correlation.header', config.correlation.header, 'Header');
+  if (config.correlation.header && !/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(config.correlation.header)) {
+    errors.push({ path: 'correlation.header', message: 'Not a valid HTTP header name' });
+  }
+  config.correlation.timeWindowMs = int('correlation.timeWindowMs', config.correlation.timeWindowMs, 0, 600_000, 'Time window');
+  config.correlation.logPatterns = list('correlation.logPatterns', config.correlation.logPatterns, (p) => {
+    try {
+      new RegExp(p);
+      return null;
+    } catch (err) {
+      return (err as Error).message.replace(/^Invalid regular expression: /, '');
+    }
+  });
+
+  return { config, errors };
+}
+
+/**
+ * Writes settings to the config file, keeping keys the settings screen does not know about.
+ * The write goes through a temporary file, so a crash never leaves half a config behind.
+ */
+export function saveConfig(file: string, config: Config): void {
+  let existing: Record<string, unknown> = {};
+  try {
+    if (existsSync(file)) existing = readRawConfig(file);
+  } catch {
+    /* unreadable: replaced */
+  }
+  mkdirSync(dirname(file), { recursive: true });
+  const tmp = `${file}.tmp`;
+  writeFileSync(tmp, JSON.stringify(merge(existing, config), null, 2) + '\n');
+  renameSync(tmp, file);
 }

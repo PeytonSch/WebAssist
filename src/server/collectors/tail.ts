@@ -22,7 +22,43 @@ const CHUNK = 256 * 1024;
 
 function globToRegExp(pattern: string): RegExp {
   const escaped = pattern.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.');
-  return new RegExp(`^${escaped}$`);
+  // Windows file names are case-insensitive, so a pattern typed in another case still matches.
+  return new RegExp(`^${escaped}$`, process.platform === 'win32' ? 'i' : '');
+}
+
+export interface PatternMatch {
+  /** Files that match, newest first. */
+  files: { path: string; bytes: number; modified: string }[];
+  /** Why nothing could match, e.g. the folder does not exist. */
+  problem: string | null;
+}
+
+/** What a log pattern matches right now, the same way the tailer resolves it. */
+export async function matchPattern(pattern: string): Promise<PatternMatch> {
+  const dir = dirname(pattern);
+  const re = globToRegExp(basename(pattern));
+  let names: string[];
+  try {
+    const st = await fs.stat(dir);
+    if (!st.isDirectory()) return { files: [], problem: `Not a folder: ${dir}` };
+    names = await fs.readdir(dir);
+  } catch (err: any) {
+    if (err?.code === 'ENOENT') return { files: [], problem: `Folder not found: ${dir}` };
+    if (err?.code === 'EACCES' || err?.code === 'EPERM') return { files: [], problem: `No permission to read ${dir}` };
+    return { files: [], problem: err?.message ?? String(err) };
+  }
+  const files: PatternMatch['files'] = [];
+  for (const name of names) {
+    if (!re.test(name)) continue;
+    try {
+      const st = await fs.stat(join(dir, name));
+      if (st.isFile()) files.push({ path: join(dir, name), bytes: st.size, modified: st.mtime.toISOString() });
+    } catch {
+      /* vanished */
+    }
+  }
+  files.sort((a, b) => (a.modified < b.modified ? 1 : -1));
+  return { files, problem: null };
 }
 
 /**

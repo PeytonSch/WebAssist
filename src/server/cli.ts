@@ -66,7 +66,8 @@ async function main(): Promise<void> {
   hub.start();
   const uiDir = fileURLToPath(new URL('./ui/', import.meta.url));
   try {
-    await startServer(hub, uiDir);
+    // Settings saved from the UI go to the file that was read, or a new one where it was looked for.
+    await startServer(hub, uiDir, { configFile: file ?? resolve(flags.config ?? 'debug-hub.config.json') });
   } catch (err: any) {
     console.error(
       err?.code === 'EADDRINUSE'

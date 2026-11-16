@@ -10,7 +10,8 @@ import { BIND_HOST, startServer } from './http';
 export interface RunningHub {
   port: number;
   url: string;
-  sessionsDir: string;
+  /** Follows changes made in Settings. */
+  sessionsDir: () => string;
   /** Set when the config file could not be read and defaults were used instead. */
   configError: string | null;
   stop: () => Promise<void>;
@@ -42,12 +43,12 @@ export async function startHub(configFile: string, uiDir: string): Promise<Runni
 
   const hub = new Hub(config);
   hub.start();
-  const server = await startServer(hub, uiDir);
+  const server = await startServer(hub, uiDir, { configFile });
   return {
     port: config.port,
     // Not "localhost": Windows resolves that to ::1 first, and the hub only listens on IPv4.
     url: `http://127.0.0.1:${config.port}`,
-    sessionsDir: config.sessionsDir,
+    sessionsDir: () => hub.cfg.sessionsDir,
     configError: error,
     stop: async () => {
       server.close();
