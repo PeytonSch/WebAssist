@@ -1074,13 +1074,6 @@ code.path {
 .launch-toast small { display: block; margin-top: 3px; font-weight: 400; opacity: 0.85; }
 .launch-toast.failed { background: var(--error); }
 
-/* ── Settings: groups of fields within a card ───────── */
-
-.field-group { padding: 18px 0 4px; border-top: 1px solid var(--border); }
-.field-group h3 { margin: 0; font-size: 13px; font-weight: 650; }
-.field-group p { margin: 3px 0 0; color: var(--text-2); font-size: 12px; }
-.field-group + .field { border-top: 0; }
-
 /* ── Tomcat page ─────────────────────────────────────── */
 
 body.tomcat-open .filterbar,
@@ -1197,6 +1190,8 @@ a.tm-path:hover { text-decoration: underline; }
   z-index: 20;
 }
 .war-notices:empty { display: none; }
+/* Above the Save and Discard buttons in the Settings footer. */
+body.settings-open .war-notices { bottom: 68px; }
 .war-notice {
   padding: 12px 14px;
   border: 1px solid var(--border);

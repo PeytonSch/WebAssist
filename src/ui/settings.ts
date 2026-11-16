@@ -722,8 +722,15 @@ function sections(): SectionDef[] {
           ]),
           'What the %D field in the access log pattern counts.',
         ),
-        ...tomcatManagementFields(),
       ],
+    },
+    {
+      // Its own card, not part of Tomcat above: the Tomcat page works whether or not logs are recorded.
+      id: 'tomcat-management',
+      nav: 'Tomcat server',
+      title: 'Tomcat server',
+      desc: 'For the Tomcat page: starting and stopping Tomcat and its webapps, disabling webapps, and deploying the WARs you build.',
+      fields: tomcatManagementFields,
     },
     {
       id: 'postgres',
@@ -808,25 +815,11 @@ function sections(): SectionDef[] {
   ];
 }
 
-/** Settings for the Tomcat page (src/ui/tomcat.ts). They work whether or not the logs are recorded. */
+/** Settings for the Tomcat page (src/ui/tomcat.ts). */
 function tomcatManagementFields(): HTMLElement[] {
-  const fileInput = (path: string, title: string, placeholder: string) => {
-    const input = textInput(path, { mono: true, placeholder });
-    const browse = browseButton('file', title, () => input.value, (p) => {
-      input.value = p;
-      change(path, p);
-    });
-    return h('div', { class: 'input-row' }, input, browse);
-  };
   const password = textInput('tomcat.manager.password', { mono: true });
   password.type = 'password';
   return [
-    h(
-      'div',
-      { class: 'field-group', id: 'set-tomcat-management' },
-      h('h3', {}, 'Management'),
-      h('p', {}, 'For the Tomcat page: starting and stopping Tomcat and its webapps, disabling webapps, and deploying WARs you build. Works whether or not the logs above are recorded.'),
-    ),
     field('tomcat.webappsDir', 'Webapps folder', folderInput('tomcat.webappsDir', 'Choose Tomcat’s webapps folder'), h('span', {}, 'Where Tomcat deploys from, usually ', h('code', {}, 'CATALINA_BASE/webapps'), '.')),
     field(
       'tomcat.disabledDir',
