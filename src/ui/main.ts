@@ -1,6 +1,7 @@
 import { correlate, type CorrItem, type Correlation } from '../shared/correlate';
 import type { HubEvent, HubStatus, Level, ServerMessage, SessionInfo } from '../shared/types';
 import { $, fmtBytes, h, type Child } from './dom';
+import { bodyLang, highlight, paint, type Lang, type Token } from './highlight';
 import { initSettings, openSettings, settingsOpen, updateSettingsStatus } from './settings';
 import { initTitlebar } from './titlebar';
 
@@ -535,17 +536,28 @@ function facts(pairs: [string, Child | number | null | undefined][]): HTMLElemen
   return dl;
 }
 
-function code(text: string, stack = false): HTMLElement {
-  const pre = h('pre', { class: 'code' });
-  if (!stack) {
-    pre.textContent = text;
-    return pre;
+function code(text: string, lang: Lang = 'text'): HTMLElement {
+  return paint(h('pre', { class: 'code' }), highlight(text, lang));
+}
+
+/** The first `max` lines of one or more blocks (a statement and its plan), highlighted. */
+function excerpt(parts: [string, Lang][], max = 16): HTMLElement {
+  const total = parts.map(([text]) => text).join('\n\n').split('\n').length;
+  const tokens: Token[] = [];
+  let left = max;
+  for (const [text, lang] of parts) {
+    if (tokens.length) {
+      if (left <= 1) break;
+      tokens.push({ text: '\n\n' });
+      left--;
+    }
+    const shown = text.split('\n').slice(0, left);
+    left -= shown.length;
+    tokens.push(...highlight(shown.join('\n'), lang));
   }
-  for (const line of text.split('\n')) {
-    const cls = /^\s*Caused by:/.test(line) ? 'cause' : /^\s+(at\s|\.\.\. \d+ (more|common))/.test(line) ? 'frame' : null;
-    pre.append(cls ? h('span', { class: cls }, line) : line, '\n');
-  }
-  return pre;
+  const hidden = total - (max - left);
+  if (hidden > 0) tokens.push({ text: `\n… ${hidden} more lines`, cls: 'dim' });
+  return paint(h('pre'), tokens);
 }
 
 function prettyBody(body: string, mime?: string | null): string {
@@ -566,7 +578,7 @@ function bodySection(title: string, d: Record<string, any>, mime?: string | null
   }
   if (d.body === '') return section(title, h('div', { class: 'rel-empty' }, 'Empty body.'));
   const text = prettyBody(d.body, mime);
-  const el = section(title, code(text), { note: fmtBytes(d.bodyBytes), copy: text });
+  const el = section(title, code(text, bodyLang(text, mime)), { note: fmtBytes(d.bodyBytes), copy: text });
   if (d.bodyTruncated) {
     el.append(h('div', { class: 'notice' }, `Truncated: showing the first ${fmtBytes(new Blob([d.body]).size)} of ${fmtBytes(d.bodyBytes)}.`));
   }
@@ -602,12 +614,14 @@ function relCard(r: Row): HTMLElement {
     ));
   const g = groupOf(r);
   const d = r.ev.data;
-  let excerpt: string | null = null;
-  if (g === 'log' && d.lines > 1) excerpt = d.message;
-  if (g === 'query') excerpt = [d.statement, d.plan].filter(Boolean).join('\n\n') || null;
-  if (excerpt) {
-    const lines = excerpt.split('\n');
-    const pre = h('pre', {}, lines.slice(0, 16).join('\n') + (lines.length > 16 ? `\n… ${lines.length - 16} more lines` : ''));
+  const parts: [string, Lang][] = [];
+  if (g === 'log' && d.lines > 1) parts.push([d.message, 'log']);
+  if (g === 'query') {
+    if (d.statement) parts.push([d.statement, 'sql']);
+    if (d.plan) parts.push([d.plan, 'plan']);
+  }
+  if (parts.length) {
+    const pre = excerpt(parts);
     // Selecting text in the excerpt should not navigate away; a plain click still opens the event.
     pre.onclick = (e) => {
       if (String(getSelection() ?? '') !== '') e.stopPropagation();
@@ -719,27 +733,27 @@ function renderDetail(): void {
     add(headersSection('Request headers', row.ev.kind === 'request' ? d.headers : undefined));
   } else if (g === 'console') {
     const text = d.stack && !String(d.text).includes('\n    at ') ? `${d.text}\n${d.stack}` : d.text;
-    add(section('Message', code(text ?? '', true), { copy: text ?? '' }));
+    add(section('Message', code(text ?? '', 'log'), { copy: text ?? '' }));
   } else if (g === 'log') {
-    add(section(d.stackFrames ? 'Stack trace' : 'Message', code(d.message ?? '', true), {
+    add(section(d.stackFrames ? 'Stack trace' : 'Message', code(d.message ?? '', 'log'), {
       note: d.lines > 1 ? `${d.lines} lines` : undefined,
       copy: d.message ?? '',
     }));
   } else if (g === 'query') {
-    if (d.statement) add(section('Statement', code(d.statement), { copy: d.statement }));
+    if (d.statement) add(section('Statement', code(d.statement, 'sql'), { copy: d.statement }));
     if (d.plan) {
-      const plan = code(d.plan);
+      const plan = code(d.plan, 'plan');
       plan.classList.add('nowrap');
       add(section('Plan', plan, { copy: d.plan }));
     }
-    if (d.detail) add(section('Detail', code(d.detail)));
-    if (d.hint) add(section('Hint', code(d.hint)));
-    if (!d.statement && !d.plan) add(section('Message', code(d.message ?? '')));
+    if (d.detail) add(section('Detail', code(d.detail, 'log')));
+    if (d.hint) add(section('Hint', code(d.hint, 'log')));
+    if (!d.statement && !d.plan) add(section('Message', code(d.message ?? '', 'log')));
   }
 
   const raw = h('details', { class: 'raw' }, h('summary', {}, 'Raw event'));
   raw.addEventListener('toggle', () => {
-    if (raw.childElementCount === 1) raw.append(code(JSON.stringify(res && res !== row.ev ? [row.ev, res] : row.ev, null, 2)));
+    if (raw.childElementCount === 1) raw.append(code(JSON.stringify(res && res !== row.ev ? [row.ev, res] : row.ev, null, 2), 'json'));
   });
   body.append(raw);
 
