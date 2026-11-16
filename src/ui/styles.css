@@ -221,6 +221,8 @@ select:focus-visible, .btn:focus-visible, .chip:focus-visible, input:focus-visib
 .btn:disabled { opacity: 0.45; cursor: not-allowed; }
 .btn.active { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
 .btn-icon { width: 30px; padding: 0; justify-content: center; color: var(--text-2); }
+/* In the top bar the icon buttons sit beside text buttons; at 30px square they looked cramped. */
+.topbar .btn-icon { width: 38px; font-size: 14px; font-weight: 600; }
 .btn-primary { background: var(--accent); border-color: var(--accent); color: #fff; }
 .btn-primary:hover { background: var(--accent); filter: brightness(1.08); }
 :root[data-theme="dark"] .btn-primary { color: #0b0d12; }
