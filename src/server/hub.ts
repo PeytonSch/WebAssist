@@ -1,13 +1,17 @@
+import type { WarInfo } from '../shared/tomcat';
 import type { CollectorStatus, HubEvent, HubStatus } from '../shared/types';
 import { ChromeCollector } from './collectors/chrome';
 import { LogFileCollector } from './collectors/logfile';
 import type { Config } from './config';
 import { makeEvent } from './normalize';
 import { SessionStore } from './store';
+import { TomcatService } from './tomcat/service';
 
 type Listener = {
   onEvent: (ev: HubEvent) => void;
   onStatus: () => void;
+  /** A new WAR is ready to deploy (Tomcat page). */
+  onWar?: (war: WarInfo) => void;
 };
 
 /** Wires collectors to the session store and to whoever is listening (the web UI). */
@@ -17,10 +21,16 @@ export class Hub {
   private logs: LogFileCollector[] = [];
   private listeners = new Set<Listener>();
   private started = false;
+  /** Webapps, Tomcat's start/stop scripts and the WAR watcher, for the Tomcat page. */
+  tomcat: TomcatService;
 
   constructor(public cfg: Config) {
     this.store = new SessionStore(cfg.sessionsDir);
     this.build();
+    this.tomcat = new TomcatService(cfg, {
+      emit: (ev) => this.emit(ev),
+      onWar: (war) => this.listeners.forEach((l) => l.onWar?.(war)),
+    });
   }
 
   private build(): void {
@@ -56,10 +66,12 @@ export class Hub {
     this.store.start();
     this.chrome?.start();
     this.logs.forEach((l) => l.start());
+    this.tomcat.start();
   }
 
   async stop(): Promise<void> {
     this.started = false;
+    await this.tomcat.stop();
     await this.stopCollectors();
     await this.store.close();
   }
@@ -81,6 +93,7 @@ export class Hub {
     }
     this.cfg = { ...next, port };
     this.build();
+    this.tomcat.reconfigure(this.cfg);
     if (this.started) {
       this.chrome?.start();
       this.logs.forEach((l) => l.start());

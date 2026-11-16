@@ -20,7 +20,7 @@ export interface TailOptions {
 const RESCAN_EVERY_MS = 1500;
 const CHUNK = 256 * 1024;
 
-function globToRegExp(pattern: string): RegExp {
+export function globToRegExp(pattern: string): RegExp {
   const escaped = pattern.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.');
   // Windows file names are case-insensitive, so a pattern typed in another case still matches.
   return new RegExp(`^${escaped}$`, process.platform === 'win32' ? 'i' : '');

@@ -1,3 +1,5 @@
+import type { WarInfo } from './tomcat';
+
 export type Source = 'browser' | 'tomcat' | 'postgres' | 'hub';
 export type Kind = 'console' | 'request' | 'response' | 'log' | 'query' | 'stats' | 'marker';
 export type Level = 'debug' | 'info' | 'warn' | 'error';
@@ -37,4 +39,6 @@ export interface SessionInfo {
 
 export type ServerMessage =
   | { type: 'events'; session: string; events: HubEvent[] }
-  | { type: 'status'; status: HubStatus };
+  | { type: 'status'; status: HubStatus }
+  /** A WAR in a watched folder was built or rebuilt and can be deployed. */
+  | { type: 'war'; war: WarInfo };

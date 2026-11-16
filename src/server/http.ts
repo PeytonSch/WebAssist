@@ -6,6 +6,7 @@ import type { HubEvent, ServerMessage } from '../shared/types';
 import { matchPattern } from './collectors/tail';
 import { editableConfig, resolvePaths, saveConfig, validateConfig } from './config';
 import type { Hub } from './hub';
+import { tomcatRoute } from './tomcat/routes';
 
 export interface ServerOptions {
   /** Where the settings screen reads and saves settings. */
@@ -126,6 +127,8 @@ export function startServer(hub: Hub, uiDir: string, opts: ServerOptions): Promi
         return json(res, 200, hub.addMarker(String(body.label ?? '')));
       }
 
+      if (await tomcatRoute(hub.tomcat, req, res, path, json, readBody)) return;
+
       if (path.startsWith('/api/')) return json(res, 404, { error: 'Not found' });
 
       if (req.method !== 'GET') return json(res, 405, { error: 'Method not allowed' });
@@ -184,6 +187,7 @@ export function startServer(hub: Hub, uiDir: string, opts: ServerOptions): Promi
       flush();
       broadcast({ type: 'status', status: hub.status() });
     },
+    onWar: (war) => broadcast({ type: 'war', war }),
   });
   // Keeps the event counter in the UI honest between status changes.
   setInterval(() => broadcast({ type: 'status', status: hub.status() }), 5000).unref();
