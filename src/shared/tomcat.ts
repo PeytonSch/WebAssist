@@ -61,6 +61,89 @@ export interface WarInfo {
   fresh: boolean;
 }
 
+/** How Start Tomcat and Stop Tomcat run: the user's script, or Tomcat's own bin/startup and bin/shutdown. */
+export interface LaunchWay {
+  how: 'script' | 'tomcat' | 'none';
+  /** The script or bin/startup file that runs. */
+  path: string | null;
+}
+
+export interface TomcatLaunch {
+  start: LaunchWay;
+  stop: LaunchWay;
+  /** CATALINA_HOME for Tomcat's own scripts, and where it came from. */
+  home: string | null;
+  homeSource: 'settings' | 'webapps' | null;
+  /** CATALINA_BASE, the folder above webapps, when it is a Tomcat base (has conf/). */
+  base: string | null;
+  /** JAVA_HOME given to Tomcat's own scripts: the setting, else Debug Hub's environment. */
+  javaHome: string | null;
+  javaSource: 'settings' | 'environment' | 'setenv' | null;
+  /** Why Tomcat's own scripts cannot be used. */
+  problems: string[];
+  /** What may go wrong when they run. */
+  warnings: string[];
+}
+
+/** One run of a start command (Settings › Tomcat server › Start commands). */
+export interface CommandRun {
+  /** Identifies this run, for stopping it. */
+  id: number;
+  name: string;
+  command: string;
+  cwd: string;
+  /** The command line as run, for display. */
+  shell: string;
+  startedAt: string;
+  endedAt: string | null;
+  pid: number | null;
+  running: boolean;
+  exitCode: number | null;
+  signal: string | null;
+  /** Why it could not be started. */
+  error: string | null;
+  /** Stopped from the Tomcat page. */
+  stopped: boolean;
+  /** The end of what it printed. */
+  output: string;
+  outputTruncated: boolean;
+}
+
+export interface StartCommandInfo {
+  /** Position in the settings, for running it on its own. */
+  index: number;
+  name: string;
+  command: string;
+  cwd: string;
+  wait: boolean;
+  /** Its latest run, if any. */
+  run: CommandRun | null;
+}
+
+export type StepStatus = 'waiting' | 'running' | 'done' | 'failed' | 'skipped';
+
+export interface StartStep {
+  kind: 'command' | 'tomcat' | 'chrome';
+  label: string;
+  status: StepStatus;
+  /** What happened, in a sentence. */
+  detail: string | null;
+  /** The command run, for command steps. */
+  runId: number | null;
+}
+
+/** One Start Tomcat: the start commands in order, then Tomcat, then Chrome. */
+export interface StartSequence {
+  startedAt: string;
+  endedAt: string | null;
+  running: boolean;
+  /** Started with "Start Tomcat only": no commands, no Chrome. */
+  only: boolean;
+  steps: StartStep[];
+  outcome: 'ok' | 'failed' | null;
+  message: string | null;
+}
+
 export interface TomcatState {
   settings: {
     webappsDir: string;
@@ -69,7 +152,15 @@ export interface TomcatState {
     stopScript: string;
     managerUrl: string;
     warWatch: string[];
+    startChrome: boolean;
   };
+  launch: TomcatLaunch;
+  /** The start commands from the settings, each with its latest run. */
+  commands: StartCommandInfo[];
+  /** Runs still going whose command is no longer in the settings, so they can still be stopped. */
+  otherRuns: CommandRun[];
+  /** The latest Start Tomcat sequence. */
+  sequence: StartSequence | null;
   /** Folders that are set but cannot be used, e.g. not found. */
   problems: { key: 'webappsDir' | 'disabledDir' | 'startScript' | 'stopScript' | 'warWatch'; message: string }[];
   webapps: WebappInfo[];

@@ -15,7 +15,10 @@ const ACTIONS: WebappAction[] = ['start', 'stop', 'reload', 'disable', 'enable']
  *   GET  /api/tomcat                         everything the page shows
  *   GET  /api/tomcat/wars                    just the WARs, for notifications after a reload
  *   POST /api/tomcat/webapps/<name>/<action> start, stop, reload, disable, enable
- *   POST /api/tomcat/server/<start|stop>     run the start or stop script
+ *   POST /api/tomcat/server/start            { only?: true } start commands, Tomcat, Chrome; only: just Tomcat
+ *   POST /api/tomcat/server/stop             run the stop script, or Tomcat's bin/shutdown
+ *   POST /api/tomcat/commands/<i>/run        { command } run start command i on its own
+ *   POST /api/tomcat/runs/<id>/stop          stop a start command's run and what it started
  *   POST /api/tomcat/deploy                  { file, name, disabledCopy: "remove" | "keep" }
  *   POST /api/tomcat/dismiss                 { file }
  */
@@ -43,8 +46,15 @@ export async function tomcatRoute(
       if (!ACTIONS.includes(action)) return json(res, 404, { error: 'Unknown action' }), true;
       return json(res, 200, { message: await tomcat.webappAction(decodeURIComponent(app[1]), action) }), true;
     }
-    const server = /^\/api\/tomcat\/server\/(start|stop)$/.exec(path);
-    if (server) return json(res, 200, { run: await tomcat.runScript(server[1] as 'start' | 'stop') }), true;
+    if (path === '/api/tomcat/server/start') return json(res, 200, { sequence: await tomcat.startTomcat((await body()).only === true) }), true;
+    if (path === '/api/tomcat/server/stop') return json(res, 200, { run: await tomcat.runScript('stop') }), true;
+    const cmd = /^\/api\/tomcat\/commands\/(\d+)\/run$/.exec(path);
+    if (cmd) {
+      const b = await body();
+      return json(res, 200, { run: await tomcat.runCommand(Number(cmd[1]), typeof b.command === 'string' ? b.command : undefined) }), true;
+    }
+    const stop = /^\/api\/tomcat\/runs\/(\d+)\/stop$/.exec(path);
+    if (stop) return json(res, 200, { message: await tomcat.stopCommand(Number(stop[1])) }), true;
 
     if (path === '/api/tomcat/deploy') {
       const b = await body();

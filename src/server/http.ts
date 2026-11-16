@@ -50,6 +50,8 @@ function readBody(req: IncomingMessage, limit = 64 * 1024): Promise<string> {
 export function startServer(hub: Hub, uiDir: string, opts: ServerOptions): Promise<Server> {
   const port = hub.cfg.port;
   const configDir = dirname(opts.configFile);
+  // "Also start Chrome" on the Tomcat page starts it as the Start Chrome button does.
+  hub.tomcat.chromeStarter = () => startChrome(hub.cfg, configDir);
   // Saves run one at a time, so two quick saves cannot interleave their reconfigures.
   let saving: Promise<unknown> = Promise.resolve();
 
