@@ -1,9 +1,10 @@
-import { app, BrowserWindow, dialog, nativeTheme, net, shell as electronShell } from 'electron';
+import { app, BrowserWindow, dialog, nativeTheme, net, session, shell as electronShell } from 'electron';
 import { appendFileSync, existsSync, mkdirSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { join } from 'node:path';
 import {
-  checkForGitUpdate, describeUpdate, findRepo, gitRunner, gitUpdatesEnabled, startGitUpdate, takeUpdateResult, updateLogFile,
+  checkForGitUpdate, describeUpdate, fetchCommandFrom, fetchDiagnostics, findRepo, gitRunner, gitUpdatesEnabled, proxyFromPac,
+  remoteHttpUrl, startGitUpdate, takeUpdateResult, updateLogFile, type FetchOptions, type GitRunner,
   type UpdateResult as GitUpdateResult,
 } from './gitupdate';
 import { Updater, type PayloadInfo, type UpdateResult } from './updater';
@@ -105,10 +106,26 @@ const GIT_STARTUP_TIMEOUT_MS = 8000;
  * Run from a git checkout (npm run app): looks for new commits on origin/main while the splash
  * shows, and offers to update. True when the update was started, so this copy should quit.
  */
+/** How to fetch: the user's command from Settings, and the proxy Windows (or macOS) would use. */
+async function gitFetchOptions(git: GitRunner, userDataDir: string): Promise<FetchOptions> {
+  const url = await remoteHttpUrl(git);
+  let proxy: string | null = null;
+  try {
+    if (url) proxy = proxyFromPac(await session.defaultSession.resolveProxy(url));
+  } catch {
+    /* no proxy information */
+  }
+  return { command: fetchCommandFrom(userDataDir), proxy };
+}
+
 async function gitUpdateAtStartup(repo: string): Promise<boolean> {
   setStatus({ text: 'Checking for updates…' });
-  const status = await checkForGitUpdate(gitRunner(repo), { fetchTimeoutMs: GIT_STARTUP_TIMEOUT_MS });
-  log(`git update check: ${status.state === 'available' ? `${status.behind} behind${status.blocked ? ` (blocked: ${status.blocked})` : ''}` : status.state === 'error' ? status.message : status.state}`);
+  const git = gitRunner(repo);
+  const fetchOptions = await gitFetchOptions(git, userData);
+  const status = await checkForGitUpdate(git, { repo, fetchOptions, fetchTimeoutMs: GIT_STARTUP_TIMEOUT_MS });
+  const fetchError = status.state === 'error' ? status.message : status.fetchError;
+  log(`git update check: ${status.state === 'available' ? `${status.behind} behind${status.blocked ? ` (blocked: ${status.blocked})` : ''}` : status.state === 'error' ? status.message : status.state}${status.state !== 'error' && status.fetchError ? ` (fetch failed: ${status.fetchError}; compared with origin/main as last fetched)` : ''}`);
+  if (fetchError) log(`git fetch details: ${await fetchDiagnostics(git, fetchOptions.proxy ?? null, fetchOptions.command ?? null)}`);
   // Can't be applied automatically (local changes, another branch): not worth stopping every
   // start for; the running app mentions it once (src/desktop/app.ts).
   if (status.state !== 'available' || status.blocked) return false;
@@ -123,7 +140,7 @@ async function gitUpdateAtStartup(repo: string): Promise<boolean> {
   });
   if (response !== 0) return false;
   setStatus({ text: 'Updating…' });
-  startGitUpdate(repo, userData);
+  startGitUpdate(repo, userData, fetchOptions);
   log(`git update started: ${status.head.slice(0, 7)} → ${status.target.slice(0, 7)}`);
   return true;
 }

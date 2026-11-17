@@ -1,6 +1,8 @@
 import { execFile, spawn } from 'node:child_process';
-import { existsSync, mkdirSync, openSync, readFileSync, writeFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { existsSync, mkdirSync, openSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { isAbsolute, join, resolve } from 'node:path';
+import { readRawConfig } from '../server/config';
+import { splitTemplate } from '../server/source/editor';
 
 /**
  * Updates for a copy run from a git checkout with `npm run app`: the way the owner runs Debug Hub
@@ -11,6 +13,14 @@ import { join, resolve } from 'node:path';
  * A check fetches origin/main and counts commits not in the checkout. Applying an update is left
  * to scripts/update-and-restart.mjs, started just before the app quits: on Windows a running
  * Electron keeps its own files locked, so `npm install` can only run once the app is gone.
+ *
+ * A fetch can fail where the user's terminal succeeds: a proxy git is not told about (the
+ * Windows system proxy applies to browsers, not git), variables set only in the shell's
+ * profile, or network rules that allow some programs and not others. So a failed fetch does
+ * not end the check: origin/main as last fetched (by the terminal, the IDE, or an earlier check)
+ * is still compared, and the update itself merges that. A plain fetch that cannot connect is
+ * retried through the system proxy, and the fetch can be a command of the user's own
+ * (updates.fetchCommand), e.g. run through their shell to get its profile and credentials.
  */
 
 /** Set DEBUG_HUB_GIT_UPDATES=0 to turn git updates off for a run. */
@@ -31,9 +41,17 @@ export interface GitCommit {
   when: string;
 }
 
+/** How the last fetch went, on every status that got as far as comparing. */
+interface FetchInfo {
+  /** Why fetching failed, or null when it worked (or was not tried). */
+  fetchError: string | null;
+  /** When origin/main was last fetched by anyone (FETCH_HEAD's time), ISO; null if unknown. */
+  lastFetch: string | null;
+}
+
 export type GitUpdateStatus =
-  | { state: 'up-to-date'; head: string }
-  | {
+  | ({ state: 'up-to-date'; head: string } & FetchInfo)
+  | ({
       state: 'available';
       head: string;
       /** origin/main: identifies this update, so "Later" is not asked again for it. */
@@ -43,8 +61,16 @@ export type GitUpdateStatus =
       commits: GitCommit[];
       /** Set when the update cannot be applied automatically, with why. */
       blocked: string | null;
-    }
+    } & FetchInfo)
   | { state: 'error'; message: string };
+
+export interface FetchOptions {
+  /** The user's own fetch command, as arguments (updates.fetchCommand); null: git fetch. */
+  command?: string[] | null;
+  /** The system proxy for the remote, e.g. http://proxy:8080; tried when a plain fetch cannot connect. */
+  proxy?: string | null;
+  timeoutMs?: number;
+}
 
 /** The repository a copy started with `npm run app` lives in, or null (an installed app). */
 export function findRepo(fromDir: string): string | null {
@@ -81,17 +107,86 @@ export function gitRunner(repo: string): GitRunner {
     });
 }
 
-/** Fetches origin/main and says whether the checkout is behind it, and whether it can catch up. */
-export async function checkForGitUpdate(git: GitRunner, opts: { fetch?: boolean; fetchTimeoutMs?: number } = {}): Promise<GitUpdateStatus> {
+const REMOTE_REF = `refs/remotes/${GIT_REMOTE}/${GIT_BRANCH}`;
+/** The fetch git does by itself, also used by the update helper. */
+export const FETCH_ARGS = ['fetch', '--quiet', '--no-tags', GIT_REMOTE, `+refs/heads/${GIT_BRANCH}:${REMOTE_REF}`];
+// What a fetch that could not reach the network says (curl and git's own wording).
+const NETWORK_ERROR = /resolve host|resolve proxy|connect to|connection (refused|reset|timed out)|timed out|network is unreachable|proxy|ssl|tls|schannel|unable to access/i;
+
+/** Runs a program in `repo` the way gitRunner runs git: no prompts, hidden, with a timeout. */
+function runIn(repo: string, file: string, args: string[], timeoutMs: number): Promise<string> {
+  return new Promise((resolve, reject) => {
+    execFile(file, args, {
+      cwd: repo,
+      timeout: timeoutMs,
+      windowsHide: true,
+      maxBuffer: 4 * 1024 * 1024,
+      env: { ...process.env, GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'never' },
+    }, (err, stdout, stderr) => {
+      if (!err) return resolve(stdout.trim());
+      const code = (err as NodeJS.ErrnoException).code;
+      const why = code === 'ENOENT' ? `${file} was not found (give its full path)` : (err as { killed?: boolean }).killed ? `no answer in ${timeoutMs / 1000} s` : (stderr || err.message).trim().split('\n').pop();
+      reject(new Error(`${file}: ${why}`));
+    });
+  });
+}
+
+/**
+ * Brings origin/main up to date: with the user's command when there is one, else git fetch, and
+ * if that cannot connect, git fetch again through the system proxy. Resolves to null when it
+ * worked, else to why not.
+ */
+export async function fetchRemote(repo: string, git: GitRunner, opts: FetchOptions = {}): Promise<string | null> {
+  const timeout = opts.timeoutMs ?? FETCH_TIMEOUT_MS;
   try {
-    const remoteRef = `refs/remotes/${GIT_REMOTE}/${GIT_BRANCH}`;
-    if (opts.fetch !== false) {
-      await git(['fetch', '--quiet', '--no-tags', GIT_REMOTE, `+refs/heads/${GIT_BRANCH}:${remoteRef}`], opts.fetchTimeoutMs ?? FETCH_TIMEOUT_MS);
+    if (opts.command?.length) await runIn(repo, opts.command[0], opts.command.slice(1), timeout);
+    else await git(FETCH_ARGS, timeout);
+    return null;
+  } catch (err) {
+    const first = (err as Error).message;
+    if (opts.command?.length || !opts.proxy || !NETWORK_ERROR.test(first)) return first;
+    try {
+      await git(['-c', `http.proxy=${opts.proxy}`, ...FETCH_ARGS], timeout);
+      return null;
+    } catch (err2) {
+      return `${first}; through the system proxy ${opts.proxy}: ${(err2 as Error).message.replace(/^git -c: /, '')}`;
     }
+  }
+}
+
+/** When origin/main was last fetched, by anything: the time of .git/FETCH_HEAD. */
+async function lastFetchTime(git: GitRunner, repo: string): Promise<string | null> {
+  try {
+    const rel = await git(['rev-parse', '--git-path', 'FETCH_HEAD']);
+    return statSync(isAbsolute(rel) ? rel : join(repo, rel)).mtime.toISOString();
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Fetches origin/main and says whether the checkout is behind it, and whether it can catch up.
+ * When fetching fails, origin/main as last fetched is compared instead, and fetchError says why.
+ */
+export async function checkForGitUpdate(
+  git: GitRunner,
+  opts: { fetch?: boolean; fetchTimeoutMs?: number; repo?: string; fetchOptions?: FetchOptions } = {},
+): Promise<GitUpdateStatus> {
+  try {
+    const repo = opts.repo ?? process.cwd();
+    const remoteRef = REMOTE_REF;
+    const fetchError = opts.fetch === false ? null : await fetchRemote(repo, git, { ...opts.fetchOptions, timeoutMs: opts.fetchTimeoutMs ?? opts.fetchOptions?.timeoutMs });
+    const lastFetch = await lastFetchTime(git, repo);
     const head = await git(['rev-parse', 'HEAD']);
-    const target = await git(['rev-parse', remoteRef]);
+    let target: string;
+    try {
+      target = await git(['rev-parse', '--verify', '--quiet', remoteRef]);
+    } catch {
+      // Never fetched, and cannot fetch now: nothing to compare with.
+      return { state: 'error', message: fetchError ?? `${GIT_REMOTE}/${GIT_BRANCH} has not been fetched yet` };
+    }
     const [behind, ahead] = (await git(['rev-list', '--left-right', '--count', `${remoteRef}...HEAD`])).split(/\s+/).map(Number);
-    if (!behind) return { state: 'up-to-date', head };
+    if (!behind) return { state: 'up-to-date', head, fetchError, lastFetch };
 
     const log = await git(['log', '--no-merges', '-n', '15', '--format=%h%x09%an%x09%cr%x09%s', `HEAD..${remoteRef}`]);
     const commits = log ? log.split('\n').map((line) => {
@@ -111,10 +206,27 @@ export async function checkForGitUpdate(git: GitRunner, opts: { fetch?: boolean;
         blocked = `The checkout has uncommitted changes: ${files.slice(0, 5).join(', ')}${files.length > 5 ? ` and ${files.length - 5} more` : ''}.`;
       }
     }
-    return { state: 'available', head, target, behind, commits, blocked };
+    return { state: 'available', head, target, behind, commits, blocked, fetchError, lastFetch };
   } catch (err) {
     return { state: 'error', message: (err as Error).message };
   }
+}
+
+/** "3 minutes ago" for an ISO time, for "as of the last fetch". */
+export function ago(iso: string | null, now = Date.now()): string {
+  if (!iso) return 'at an unknown time';
+  const s = Math.max(0, (now - Date.parse(iso)) / 1000);
+  if (s < 90) return 'just now';
+  if (s < 5400) return `${Math.round(s / 60)} minutes ago`;
+  if (s < 129_600) return `${Math.round(s / 3600)} hours ago`;
+  return `${Math.round(s / 86_400)} days ago`;
+}
+
+/** What to say when fetching failed: why, and what the comparison is based on instead. */
+export function fetchNote(s: FetchInfo): string {
+  if (!s.fetchError) return '';
+  return `Could not reach ${GIT_REMOTE} just now (${s.fetchError}), so this is as of the last fetch, ${ago(s.lastFetch)}. ` +
+    `If your terminal can fetch, set Settings › Advanced › Fetch updates with to a command that does it the same way, e.g. nu -l -c "git fetch ${GIT_REMOTE} ${GIT_BRANCH}".`;
 }
 
 /** The prompt's text for an available update. */
@@ -122,10 +234,79 @@ export function describeUpdate(s: Extract<GitUpdateStatus, { state: 'available' 
   const n = `${s.behind} new commit${s.behind === 1 ? '' : 's'}`;
   const list = s.commits.map((c) => `• ${c.subject}  (${c.author}, ${c.when})`).join('\n');
   const more = s.behind > s.commits.length ? `\n…and ${s.behind - s.commits.length} more` : '';
+  const note = s.fetchError ? `\n\n${fetchNote(s)}` : '';
   const how = s.blocked
     ? `\n\nIt cannot be updated automatically. ${s.blocked} Update by hand with git pull, then npm run app.`
-    : `\n\nUpdating quits Debug Hub, runs git pull${' '}(and npm install if dependencies changed), then starts it again with npm run app.`;
-  return { message: `A Debug Hub update is available: ${n} on ${GIT_REMOTE}/${GIT_BRANCH}`, detail: `${list}${more}${how}` };
+    : `\n\nUpdating quits Debug Hub, brings in these commits (git fetch, then a fast-forward merge; npm install if dependencies changed), then starts it again with npm run app.`;
+  return { message: `A Debug Hub update is available: ${n} on ${GIT_REMOTE}/${GIT_BRANCH}`, detail: `${list}${more}${how}${note}` };
+}
+
+// ── Fetching differently ────────────────────────────────
+
+/**
+ * The fetch command from Settings (updates.fetchCommand), split into arguments; null when unset
+ * or unreadable. Read from the settings file each time, so a change applies without a restart.
+ */
+export function fetchCommandFrom(userData: string): string[] | null {
+  try {
+    const raw = readRawConfig(join(userData, 'debug-hub.config.json')) as { updates?: { fetchCommand?: unknown } };
+    const cmd = raw.updates?.fetchCommand;
+    return typeof cmd === 'string' && cmd.trim() ? splitTemplate(cmd) : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The proxy Chromium would use for `url`, from Electron's session.resolveProxy answer
+ * ("PROXY host:port; DIRECT", "HTTPS host:443", "SOCKS5 host:1080" or "DIRECT"), as a URL git's
+ * http.proxy takes; null for a direct connection.
+ */
+export function proxyFromPac(answer: string): string | null {
+  for (const part of answer.split(';')) {
+    const m = /^\s*(PROXY|HTTPS|SOCKS5|SOCKS4|SOCKS)\s+(\S+)\s*$/i.exec(part);
+    if (!m) continue;
+    const scheme = { PROXY: 'http', HTTPS: 'https', SOCKS5: 'socks5', SOCKS4: 'socks4', SOCKS: 'socks4' }[m[1].toUpperCase() as 'PROXY'];
+    return `${scheme}://${m[2]}`;
+  }
+  return null;
+}
+
+/** The HTTPS URL of origin, for asking which proxy applies; null for SSH remotes (no proxy). */
+export async function remoteHttpUrl(git: GitRunner): Promise<string | null> {
+  try {
+    const url = await git(['remote', 'get-url', GIT_REMOTE]);
+    return /^https?:\/\//i.test(url) ? url : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Facts that tell a network problem from a git one, for the log when a fetch fails: which git,
+ * the proxy settings git sees, and the system proxy. Values are trimmed to host names.
+ */
+export async function fetchDiagnostics(git: GitRunner, proxy: string | null, command: string[] | null): Promise<string> {
+  const host = (v: string) => v.replace(/^[a-z0-9+.-]+:\/\/(?:[^@/]*@)?/i, '').replace(/\/.*$/, '');
+  const parts: string[] = [];
+  try {
+    parts.push(await git(['--version']));
+  } catch {
+    parts.push('git not runnable');
+  }
+  const env = ['HTTPS_PROXY', 'HTTP_PROXY', 'ALL_PROXY', 'NO_PROXY'].filter((k) => process.env[k] || process.env[k.toLowerCase()]);
+  parts.push(env.length ? `proxy variables set: ${env.join(', ')}` : 'no proxy variables');
+  for (const key of ['http.proxy', 'https.proxy']) {
+    try {
+      const v = await git(['config', '--get', key]);
+      if (v) parts.push(`${key}=${host(v)}`);
+    } catch {
+      /* not set */
+    }
+  }
+  parts.push(proxy ? `system proxy ${host(proxy)}` : 'system proxy: none');
+  if (command) parts.push(`fetch command: ${command[0]}`);
+  return parts.join('; ');
 }
 
 // ── "Later", remembered ─────────────────────────────────
@@ -169,7 +350,7 @@ const resultFile = (userData: string) => join(userData, 'git-update-result.json'
  * `npm run app` again. Call app.quit() right after. It runs on the system's node (the one npm
  * uses), not on this Electron, whose files `npm install` may need to replace.
  */
-export function startGitUpdate(repo: string, userData: string): void {
+export function startGitUpdate(repo: string, userData: string, fetch: FetchOptions = {}): void {
   mkdirSync(userData, { recursive: true });
   const log = openSync(join(userData, 'git-update.log'), 'a');
   const child = spawn('node', [
@@ -179,6 +360,8 @@ export function startGitUpdate(repo: string, userData: string): void {
     '--remote', GIT_REMOTE,
     '--branch', GIT_BRANCH,
     '--result', resultFile(userData),
+    ...(fetch.command?.length ? ['--fetch-command', JSON.stringify(fetch.command)] : []),
+    ...(fetch.proxy ? ['--proxy', fetch.proxy] : []),
   ], { cwd: repo, detached: true, stdio: ['ignore', log, log], windowsHide: true, env: process.env });
   child.on('error', () => undefined);
   child.unref();

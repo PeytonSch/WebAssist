@@ -4,7 +4,8 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
-  checkForGitUpdate, describeUpdate, dismiss, dismissedTarget, findRepo, gitRunner, takeUpdateResult,
+  ago, checkForGitUpdate, describeUpdate, dismiss, dismissedTarget, fetchCommandFrom, fetchRemote, findRepo, gitRunner, proxyFromPac,
+  takeUpdateResult, type GitRunner,
 } from '../src/shell/gitupdate';
 
 const HELPER = resolve('scripts/update-and-restart.mjs');
@@ -46,7 +47,7 @@ beforeEach(() => {
 });
 afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
-const check = () => checkForGitUpdate(gitRunner(checkout));
+const check = (fetchOptions = {}) => checkForGitUpdate(gitRunner(checkout), { repo: checkout, fetchOptions });
 
 describe('findRepo', () => {
   it('finds the checkout above dist/shell, and nothing for an installed app', () => {
@@ -92,10 +93,81 @@ describe('checkForGitUpdate', () => {
     expect(await check()).toMatchObject({ blocked: expect.stringContaining('branch feature') });
   });
 
-  it('reports a failed fetch instead of throwing', async () => {
+  it('compares with origin/main as last fetched when fetching fails', async () => {
+    // Fetched earlier (by the terminal, the IDE or an earlier check), then the network went away.
+    publish('a.txt', '1', 'Fetched before the network went away');
+    git(checkout, 'fetch', '-q', 'origin');
     git(checkout, 'remote', 'set-url', 'origin', join(dir, 'missing.git'));
     const s = await check();
-    expect(s.state).toBe('error');
+    expect(s).toMatchObject({ state: 'available', behind: 1, blocked: null, fetchError: expect.stringMatching(/git fetch/) });
+    if (s.state !== 'available') return;
+    expect(s.lastFetch).not.toBeNull();
+    expect(describeUpdate(s).detail).toMatch(/Could not reach origin just now .* as of the last fetch, just now/);
+  });
+
+  it('is an error only when there is nothing fetched to compare with', async () => {
+    git(checkout, 'update-ref', '-d', 'refs/remotes/origin/main');
+    git(checkout, 'remote', 'set-url', 'origin', join(dir, 'missing.git'));
+    expect(await check()).toMatchObject({ state: 'error', message: expect.stringMatching(/git fetch/) });
+  });
+
+  it('fetches with the command from Settings instead of git fetch', async () => {
+    publish('a.txt', '1', 'New');
+    const marker = join(dir, 'ran.txt');
+    // Stands in for e.g. nu -l -c "git fetch origin main": a program of the user's that fetches.
+    const command = [process.execPath, '-e', `require('fs').writeFileSync(${JSON.stringify(marker)}, 'x'); require('child_process').execFileSync('git', ['fetch', '-q', 'origin', 'main'])`];
+    expect(await check({ command })).toMatchObject({ state: 'available', behind: 1, fetchError: null });
+    expect(readFileSync(marker, 'utf8')).toBe('x');
+    expect(await check({ command: ['no-such-program-xyz'] })).toMatchObject({ fetchError: expect.stringMatching(/no-such-program-xyz was not found/) });
+  });
+});
+
+describe('fetching through the system proxy', () => {
+  it('retries a fetch that cannot connect through the proxy, and only then', async () => {
+    const calls: string[][] = [];
+    const flaky: GitRunner = async (args) => {
+      calls.push(args);
+      if (args[0] === 'fetch') throw new Error("git fetch: fatal: unable to access 'https://github.com/x/y.git/': Could not resolve host: github.com");
+      return '';
+    };
+    expect(await fetchRemote(dir, flaky, { proxy: 'http://proxy.corp:8080' })).toBeNull();
+    expect(calls[1].slice(0, 3)).toEqual(['-c', 'http.proxy=http://proxy.corp:8080', 'fetch']);
+
+    calls.length = 0;
+    expect(await fetchRemote(dir, flaky, {})).toMatch(/Could not resolve host/);
+    expect(calls).toHaveLength(1);
+
+    // Not a network problem (e.g. a missing branch): no retry.
+    const missing: GitRunner = async (args) => {
+      calls.push(args);
+      throw new Error("git fetch: fatal: couldn't find remote ref refs/heads/main");
+    };
+    calls.length = 0;
+    expect(await fetchRemote(dir, missing, { proxy: 'http://proxy.corp:8080' })).toMatch(/remote ref/);
+    expect(calls).toHaveLength(1);
+  });
+
+  it('reads the proxy from Chromium\'s answer', () => {
+    expect(proxyFromPac('PROXY proxy.corp:8080; DIRECT')).toBe('http://proxy.corp:8080');
+    expect(proxyFromPac('HTTPS secure.corp:443')).toBe('https://secure.corp:443');
+    expect(proxyFromPac('SOCKS5 127.0.0.1:1080')).toBe('socks5://127.0.0.1:1080');
+    expect(proxyFromPac('DIRECT')).toBeNull();
+  });
+});
+
+describe('fetch command setting', () => {
+  it('is read from the settings file and split into arguments', () => {
+    expect(fetchCommandFrom(dir)).toBeNull();
+    writeFileSync(join(dir, 'debug-hub.config.json'), JSON.stringify({ updates: { fetchCommand: 'nu -l -c "git fetch origin main"' } }));
+    expect(fetchCommandFrom(dir)).toEqual(['nu', '-l', '-c', 'git fetch origin main']);
+  });
+
+  it('says how long ago the last fetch was', () => {
+    const now = Date.parse('2026-11-17T12:00:00Z');
+    expect(ago('2026-11-17T11:59:30Z', now)).toBe('just now');
+    expect(ago('2026-11-17T11:20:00Z', now)).toBe('40 minutes ago');
+    expect(ago('2026-11-16T20:00:00Z', now)).toBe('16 hours ago');
+    expect(ago(null, now)).toBe('at an unknown time');
   });
 });
 
@@ -108,9 +180,9 @@ describe('Later', () => {
 });
 
 describe('scripts/update-and-restart.mjs', () => {
-  const runHelper = () => {
+  const runHelper = (...extra: string[]) => {
     const result = join(dir, 'result.json');
-    const r = spawnSync(process.execPath, [HELPER, '--pid', '0', '--repo', checkout, '--result', result, '--no-restart'], { env: ENV, encoding: 'utf8' });
+    const r = spawnSync(process.execPath, [HELPER, '--pid', '0', '--repo', checkout, '--result', result, '--no-restart', ...extra], { env: ENV, encoding: 'utf8' });
     expect(r.status, r.stdout + r.stderr).toBe(0);
     return { out: r.stdout, result: JSON.parse(readFileSync(result, 'utf8')) };
   };
@@ -136,8 +208,31 @@ describe('scripts/update-and-restart.mjs', () => {
     const before = git(checkout, 'rev-parse', 'HEAD');
     const { result } = runHelper();
     expect(result.ok).toBe(false);
-    expect(result.error).toMatch(/git pull failed/);
+    expect(result.error).toMatch(/git merge failed/);
     expect(result.to).toBe(before);
+  });
+
+  it('merges commits fetched earlier when it cannot fetch now', () => {
+    publish('a.txt', '1', 'Fetched by the terminal');
+    git(checkout, 'fetch', '-q', 'origin');
+    git(checkout, 'remote', 'set-url', 'origin', join(dir, 'missing.git'));
+    const { result } = runHelper();
+    expect(result).toMatchObject({ ok: true, to: git(other, 'rev-parse', 'HEAD'), fetchError: expect.stringMatching(/git fetch/) });
+  });
+
+  it('fails clearly when it can neither fetch nor find anything fetched earlier', () => {
+    git(checkout, 'remote', 'set-url', 'origin', join(dir, 'missing.git'));
+    const { result } = runHelper();
+    expect(result).toMatchObject({ ok: false, error: expect.stringMatching(/Could not reach origin/) });
+  });
+
+  it('fetches with the command it is given', () => {
+    publish('a.txt', '1', 'New');
+    const marker = join(dir, 'ran.txt');
+    const command = [process.execPath, '-e', `require('fs').writeFileSync(${JSON.stringify(marker)}, 'x'); require('child_process').execFileSync('git', ['fetch', '-q', 'origin', 'main'])`];
+    const { result } = runHelper('--fetch-command', JSON.stringify(command));
+    expect(result).toMatchObject({ ok: true, fetchError: null, to: git(other, 'rev-parse', 'HEAD') });
+    expect(readFileSync(marker, 'utf8')).toBe('x');
   });
 
   it('hands its result to the next start once', () => {

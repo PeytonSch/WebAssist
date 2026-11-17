@@ -826,6 +826,12 @@ function sections(): SectionDef[] {
         field('chrome.host', 'Chrome host', textInput('chrome.host', { mono: true }), 'Where Chrome’s debugging port is. Leave at 127.0.0.1 unless Chrome runs elsewhere.'),
         field('tail.pollMs', 'Log poll interval', numberInput('tail.pollMs', { min: 50, max: 10_000, unit: 'ms' }), 'How often log files are checked for new lines.'),
         field('tail.flushMs', 'Multiline wait', numberInput('tail.flushMs', { min: 10, max: 10_000, unit: 'ms' }), 'How long to wait for the rest of a stack trace before showing it.'),
+        field(
+          'updates.fetchCommand',
+          'Fetch updates with',
+          textInput('updates.fetchCommand', { mono: true, placeholder: isWindows ? 'nu -l -c "git fetch origin main"' : 'bash -lc "git fetch origin main"' }),
+          h('span', {}, 'Run from npm run app, Debug Hub checks origin/main for updates with ', h('code', {}, 'git fetch'), '. If that fails here but works in your terminal (a proxy or credentials only your shell sets up), give a command that fetches the way your terminal does. Run in the checkout, without a shell of ours; empty: git fetch. Without a working fetch, updates still come from whatever your terminal or IDE last fetched.'),
+        ),
       ],
     },
   ];

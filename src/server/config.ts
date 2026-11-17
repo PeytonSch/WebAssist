@@ -88,6 +88,14 @@ export interface Config {
   api: ApiClientConfig;
   /** "Go to source": the editor that opens Java classes named in logs, and where sources are. */
   editor: EditorConfig;
+  /** Updates of a git checkout run with npm run app (src/shell/gitupdate.ts). */
+  updates: {
+    /**
+     * A command that fetches origin/main, for when git run by Debug Hub cannot reach the remote
+     * but the terminal can, e.g. nu -l -c "git fetch origin main". Empty: git fetch.
+     */
+    fetchCommand: string;
+  };
 }
 
 export interface EditorConfig {
@@ -177,6 +185,7 @@ export const DEFAULT_CONFIG: Config = {
     timeoutMs: 30_000,
     addRequestId: true,
   },
+  updates: { fetchCommand: '' },
   editor: {
     kind: '',
     program: '',
@@ -455,6 +464,9 @@ export function validateConfig(input: unknown): { config: Config; errors: FieldE
     errors.push({ path: 'editor.terminal', message: 'Must contain {cmd}, or {file} and {line}' });
   }
   if (config.editor.kind === 'custom' && !config.editor.custom) errors.push({ path: 'editor.custom', message: 'Enter the command that opens a file' });
+
+  const up: Record<string, unknown> = isObj(config.updates) ? config.updates : {};
+  config.updates = { fetchCommand: template('updates.fetchCommand', up.fetchCommand, 'Fetch command', []) };
 
   /** The API client's settings. Error paths name the row, e.g. api.specs.1.url. */
   function apiClient(v: unknown): ApiClientConfig {

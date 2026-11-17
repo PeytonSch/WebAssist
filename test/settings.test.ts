@@ -64,6 +64,14 @@ describe('validateConfig', () => {
     expect(errors.map((e) => e.path).sort()).toEqual(['tomcat.preserveFiles.1', 'tomcat.startCommands.2.command']);
   });
 
+  it('checks the update fetch command and keeps it as written', () => {
+    const input: any = structuredClone(DEFAULT_CONFIG);
+    input.updates = { fetchCommand: ' nu -l -c "git fetch origin main" ' };
+    expect(validateConfig(input)).toMatchObject({ errors: [], config: { updates: { fetchCommand: 'nu -l -c "git fetch origin main"' } } });
+    input.updates = { fetchCommand: 'nu -c "git fetch' };
+    expect(validateConfig(input).errors.map((e) => e.path)).toEqual(['updates.fetchCommand']);
+  });
+
   it('refuses a Chrome port equal to the hub port', () => {
     const input: any = structuredClone(DEFAULT_CONFIG);
     input.chrome.port = input.port;

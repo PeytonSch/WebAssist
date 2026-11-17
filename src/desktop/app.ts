@@ -1,10 +1,10 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, shell, type IpcMainInvokeEvent, type MenuItemConstructorOptions } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, session, shell, type IpcMainInvokeEvent, type MenuItemConstructorOptions } from 'electron';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { environmentReport, startHub, type RunningHub } from '../server/embed';
 import {
-  checkEveryMs, checkForGitUpdate, describeUpdate, dismiss, dismissedTarget, findRepo, gitRunner, gitUpdatesEnabled, startGitUpdate,
-  type GitUpdateStatus,
+  checkEveryMs, checkForGitUpdate, describeUpdate, dismiss, dismissedTarget, fetchCommandFrom, fetchDiagnostics, fetchNote, findRepo,
+  gitRunner, gitUpdatesEnabled, proxyFromPac, remoteHttpUrl, startGitUpdate, type FetchOptions, type GitUpdateStatus,
 } from '../shell/gitupdate';
 import type { ShellContext } from '../shell/main';
 
@@ -179,8 +179,33 @@ function watchGitUpdates(repo: string, win: BrowserWindow, ctx: ShellContext) {
   const git = gitRunner(repo);
   let asking = false;
   let quitting = false;
+  let lastLoggedError = '';
 
-  const offer = async (status: Extract<GitUpdateStatus, { state: 'available' }>, fromMenu: boolean): Promise<void> => {
+  // The user's fetch command (read each time, so Settings applies at once) and the system proxy.
+  const fetchOptions = async (): Promise<FetchOptions> => {
+    const url = await remoteHttpUrl(git);
+    let proxy: string | null = null;
+    try {
+      if (url) proxy = proxyFromPac(await session.defaultSession.resolveProxy(url));
+    } catch {
+      /* no proxy information */
+    }
+    return { command: fetchCommandFrom(ctx.userData), proxy };
+  };
+  const checkOnce = async (): Promise<{ status: GitUpdateStatus; opts: FetchOptions }> => {
+    const opts = await fetchOptions();
+    const status = await checkForGitUpdate(git, { repo, fetchOptions: opts });
+    const error = status.state === 'error' ? status.message : status.fetchError;
+    // Logged once per different error, not every 5 minutes.
+    if (error && error !== lastLoggedError) {
+      ctx.log(`git update check: fetch failed: ${error}`);
+      ctx.log(`git fetch details: ${await fetchDiagnostics(git, opts.proxy ?? null, opts.command ?? null)}`);
+    }
+    lastLoggedError = error ?? '';
+    return { status, opts };
+  };
+
+  const offer = async (status: Extract<GitUpdateStatus, { state: 'available' }>, fromMenu: boolean, opts: FetchOptions): Promise<void> => {
     const { message, detail } = describeUpdate(status);
     asking = true;
     try {
@@ -204,7 +229,7 @@ function watchGitUpdates(repo: string, win: BrowserWindow, ctx: ShellContext) {
       }
       ctx.log(`git update started: ${status.head.slice(0, 7)} → ${status.target.slice(0, 7)}`);
       quitting = true;
-      startGitUpdate(repo, ctx.userData);
+      startGitUpdate(repo, ctx.userData, opts);
       // Quitting stops the hub first, so the session file is complete (before-quit in run()).
       app.quit();
     } finally {
@@ -214,10 +239,9 @@ function watchGitUpdates(repo: string, win: BrowserWindow, ctx: ShellContext) {
 
   const check = async (): Promise<void> => {
     if (asking || quitting || win.isDestroyed()) return;
-    const status = await checkForGitUpdate(git);
-    if (status.state === 'error') ctx.log(`git update check: ${status.message}`);
+    const { status, opts } = await checkOnce();
     if (status.state !== 'available' || status.target === dismissedTarget(ctx.userData) || asking || quitting) return;
-    await offer(status, false);
+    await offer(status, false, opts);
   };
 
   const timer = setInterval(() => void check(), checkEveryMs());
@@ -228,11 +252,21 @@ function watchGitUpdates(repo: string, win: BrowserWindow, ctx: ShellContext) {
     /** From the menu: always answers, even "up to date". */
     checkNow: async (): Promise<void> => {
       if (asking || quitting) return;
-      const status = await checkForGitUpdate(git);
-      if (status.state === 'available') return offer(status, true);
+      const { status, opts } = await checkOnce();
+      if (status.state === 'available') return offer(status, true, opts);
       await dialog.showMessageBox(win, status.state === 'up-to-date'
-        ? { type: 'info', message: 'Debug Hub is up to date', detail: `The checkout is at origin/main (${status.head.slice(0, 7)}).` }
-        : { type: 'warning', message: 'Could not check for updates', detail: status.message });
+        ? {
+            type: status.fetchError ? 'warning' : 'info',
+            message: status.fetchError ? 'Could not reach GitHub to check for updates' : 'Debug Hub is up to date',
+            detail: status.fetchError
+              ? `${fetchNote(status)}\n\nAs of that fetch the checkout is up to date (${status.head.slice(0, 7)}). Details are in shell.log.`
+              : `The checkout is at origin/main (${status.head.slice(0, 7)}).`,
+          }
+        : {
+            type: 'warning',
+            message: 'Could not check for updates',
+            detail: `${status.message}\n\nIf your terminal can fetch, set Settings › Advanced › Fetch updates with to a command that does it the same way, e.g. nu -l -c "git fetch origin main". Details are in shell.log.`,
+          });
     },
   };
 }
