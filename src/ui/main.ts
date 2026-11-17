@@ -1,5 +1,6 @@
 import { correlate, type CorrItem, type Correlation } from '../shared/correlate';
 import type { HubEvent, HubStatus, Level, ServerMessage, SessionInfo } from '../shared/types';
+import { apiOpen, closeApi, editEventInApi, initApi, openApi, replayEvent, saveEventToCatalog, setJsonViewerOpener } from './api';
 import { CHROME_LAUNCH_EVENT, chromeButton, chromeLaunching, chromeLaunchNote, startChrome } from './chrome';
 import { $, fmtBytes, h, type Child } from './dom';
 import { createFinder } from './find';
@@ -47,6 +48,7 @@ const SOURCES = [
   ['browser', 'Browser'],
   ['tomcat', 'Tomcat'],
   ['postgres', 'Postgres'],
+  ['client', 'API'],
 ] as const;
 const LEVELS: Level[] = ['error', 'warn', 'info', 'debug'];
 const GROUPS = [
@@ -140,6 +142,8 @@ const failedOf = (r: Row): boolean => !!resOf(r)?.data.failed;
 const typeOf = (r: Row): string => resOf(r)?.data.resourceType ?? r.ev.data.resourceType ?? '';
 /** The webapp a Tomcat event came from: '' when not known, null for other sources. */
 const webappOf = (r: Row): string | null => (r.ev.source === 'tomcat' ? r.ev.data.webapp ?? '' : null);
+/** Requests made from the browser or from the API screen: both have a request and a response event. */
+const isSender = (source: string) => source === 'browser' || source === 'client';
 const isStatic = (r: Row) => r.ev.source === 'browser' && groupOf(r) === 'network' && STATIC_TYPES.has(typeOf(r));
 
 function hay(r: Row): string {
@@ -190,7 +194,7 @@ function ingest(events: HubEvent[], bulk = false): void {
     if (state.seen.has(ev.id)) continue;
     state.seen.add(ev.id);
     const t = Date.parse(ev.ts);
-    const netId: string | undefined = ev.source === 'browser' ? ev.data.netId : undefined;
+    const netId: string | undefined = isSender(ev.source) ? ev.data.netId : undefined;
 
     if (ev.kind === 'response' && netId) {
       const existing = state.byNet.get(netId);
@@ -328,9 +332,9 @@ function mainCell(r: Row): Child[] {
   const g = groupOf(r);
   if (g === 'network') {
     const d = r.ev.data;
-    const text = r.ev.source === 'browser' ? r.ev.summary.replace(/^\S+\s/, '').replace(/ [→✕] .*$/, '') : d.path;
+    const text = isSender(r.ev.source) ? r.ev.summary.replace(/^\S+\s/, '').replace(/ [→✕] .*$/, '') : d.path;
     return [
-      h('span', { class: 'kind' }, r.ev.source === 'browser' ? (typeOf(r) || 'net').toLowerCase() : 'access'),
+      h('span', { class: 'kind' }, r.ev.source === 'client' ? 'api' : r.ev.source === 'browser' ? (typeOf(r) || 'net').toLowerCase() : 'access'),
       webappTag(r),
       h('span', { class: 'method' }, d.method ?? ''),
       h('span', { class: 'text' }, text),
@@ -370,7 +374,7 @@ function linkIcon(): Node {
 }
 
 function sourceBadge(source: string): HTMLElement {
-  const label = source === 'hub' ? 'Marker' : source[0].toUpperCase() + source.slice(1);
+  const label = source === 'hub' ? 'Marker' : source === 'client' ? 'API' : source[0].toUpperCase() + source.slice(1);
   return h('span', { class: `src src-${source}` }, label);
 }
 
@@ -738,7 +742,7 @@ function shortUrl(url: string | undefined): string {
 
 /** The response or request body of a browser request, when it is JSON. */
 function bodySource(row: Row, which: 'response' | 'request'): JsonSource | null {
-  if (groupOf(row) !== 'network' || row.ev.source !== 'browser') return null;
+  if (groupOf(row) !== 'network' || !isSender(row.ev.source)) return null;
   const req = row.ev.kind === 'request' ? row.ev.data : {};
   const d: Record<string, any> = which === 'response' ? resOf(row)?.data ?? {} : req;
   if (typeof d.body !== 'string' || d.body.trim() === '') return null;
@@ -920,13 +924,15 @@ function renderDetail(): void {
   const body = h('div', { class: 'd-body' });
   const add = (el: HTMLElement | null) => el && body.append(el);
 
-  if (g === 'network' && row.ev.source === 'browser') {
+  if (g === 'network' && isSender(row.ev.source)) {
     const status = failedOf(row) ? rd.errorText : statusOf(row) != null ? `${statusOf(row)} ${rd.statusText ?? ''}` : 'Pending';
     add(section('Request', facts([
       ['URL', d.url], ['Method', d.method], ['Status', status], ['Type', typeOf(row)],
       ['Duration', fmtDuration(durationOf(row))], ['Transferred', fmtBytes(rd.encodedBytes)],
       ['Content type', rd.mimeType], ['Request ID', ridOf(row)], ['Page', d.pageUrl],
+      ['Sent by', row.ev.source === 'client' ? `API client${d.label ? ` · ${d.label}` : ''}` : null],
     ])));
+    if (row.ev.kind === 'request') add(replayActions(row.ev.data));
   } else if (g === 'network') {
     add(section('Access log', facts([
       ['Webapp', d.webapp], ['Path', d.path], ['Method', d.method], ['Status', d.status], ['Duration', fmtDuration(d.durationMs)],
@@ -949,10 +955,10 @@ function renderDetail(): void {
 
   if (g !== 'marker') {
     relatedHost = h('div', { class: 'related' });
-    add(section(row.ev.source === 'browser' ? 'Server events' : 'Related events', relatedHost));
+    add(section(isSender(row.ev.source) ? 'Server events' : 'Related events', relatedHost));
   }
 
-  if (g === 'network' && row.ev.source === 'browser') {
+  if (g === 'network' && isSender(row.ev.source)) {
     add(bodySection('Response body', rd, rd.mimeType, bodySource(row, 'response')));
     add(bodySection('Request body', row.ev.kind === 'request' ? d : {}, undefined, bodySource(row, 'request')));
     add(headersSection('Response headers', rd.headers));
@@ -993,6 +999,47 @@ function renderDetail(): void {
   detail.append(body);
   refreshRelated();
   finder.refresh(newEvent);
+}
+
+/** Save to catalog, Edit and send, Replay: a recorded request sent again from the API screen. */
+function replayActions(data: Record<string, any>): HTMLElement {
+  const note = h('span', { class: 'd-actions-note', role: 'status' });
+  const replay = h('button', { class: 'btn btn-sm', type: 'button', title: 'Send this request again now, through the hub, with a fresh request ID' }, 'Replay') as HTMLButtonElement;
+  replay.onclick = async () => {
+    replay.disabled = true;
+    note.textContent = 'Sending…';
+    note.classList.remove('error');
+    try {
+      selectEvent(await replayEvent(data));
+    } catch (err) {
+      note.textContent = (err as Error).message;
+      note.classList.add('error');
+      replay.disabled = false;
+    }
+  };
+  const edit = h('button', { class: 'btn btn-sm', type: 'button', title: 'Open it in the API screen to change it before sending' }, 'Edit and send');
+  edit.onclick = () => void editEventInApi(data);
+  const keep = h('button', { class: 'btn btn-sm', type: 'button', title: 'Save it to the API screen’s catalog of requests' }, 'Save to catalog…');
+  keep.onclick = () => void saveEventToCatalog(data);
+  return h('div', { class: 'd-actions' }, replay, edit, keep, note);
+}
+
+/**
+ * Selects an event by id, e.g. one the API screen just sent: switches back to the live session,
+ * shows API client events if they were filtered out, and waits briefly for the event to arrive.
+ */
+export function selectEvent(id: string, tries = 30): void {
+  const row = state.byKey.get(id) ?? state.rows.find((r) => r.res?.id === id);
+  if (!row) {
+    if (state.mode !== 'live' && state.liveSession) void openSession(state.liveSession).then(() => selectEvent(id, tries));
+    else if (tries > 0) setTimeout(() => selectEvent(id, tries - 1), 100);
+    return;
+  }
+  if (state.filters.off.includes(`source:${row.ev.source}`)) {
+    setFilters({ off: state.filters.off.filter((f) => f !== `source:${row.ev.source}`) });
+    refilter();
+  }
+  select(row, true);
 }
 
 // ── Top bar ─────────────────────────────────────────────
@@ -1280,6 +1327,7 @@ function init(): void {
       if (open) {
         closeTomcat();
         closeJsonViewer();
+        closeApi();
       }
       renderList();
     },
@@ -1287,16 +1335,31 @@ function init(): void {
   $('btn-settings').onclick = () => openSettings();
   initTomcat({
     onToggle: (open) => {
-      if (open) closeJsonViewer();
+      if (open) {
+        closeApi();
+        closeJsonViewer();
+      }
       renderList();
     },
   });
   initJsonViewer({ onToggle: () => renderList() });
   $('btn-tomcat').onclick = () => openTomcat();
+  initApi({
+    onToggle: (open) => {
+      if (open) closeJsonViewer();
+      renderList();
+    },
+    showEvent: (id) => selectEvent(id),
+  });
+  // The viewer opens on top of the API screen, which comes back when it closes.
+  setJsonViewerOpener((text, { title }) =>
+    openJsonViewer({ title: 'Response body', meta: [title], text, fileName: 'response.json' }),
+  );
+  $('btn-api').onclick = () => openApi();
 
   document.addEventListener('keydown', (e) => {
-    // The settings, Tomcat and JSON viewer screens have their own keys.
-    if (settingsOpen() || tomcatOpen() || jsonViewerOpen()) return;
+    // The settings, Tomcat, API and JSON viewer screens have their own keys.
+    if (settingsOpen() || tomcatOpen() || apiOpen() || jsonViewerOpen()) return;
     if (finder.handleKey(e)) return;
     const target = e.target as HTMLElement;
     const typing = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT';

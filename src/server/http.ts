@@ -3,6 +3,8 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { dirname, extname, isAbsolute, join, normalize, resolve, sep } from 'node:path';
 import { WebSocketServer, type WebSocket } from 'ws';
 import type { HubEvent, ServerMessage } from '../shared/types';
+import { CATALOG_FILE, CatalogStore } from './apiclient/catalog';
+import { apiClientRoute } from './apiclient/routes';
 import { scanLogsFolder } from './collectors/logsdir';
 import { chromeSetup, startChrome } from './chrome-launch';
 import { matchPattern } from './collectors/tail';
@@ -52,6 +54,8 @@ export function startServer(hub: Hub, uiDir: string, opts: ServerOptions): Promi
   const configDir = dirname(opts.configFile);
   // "Also start Chrome" on the Tomcat page starts it as the Start Chrome button does.
   hub.tomcat.chromeStarter = () => startChrome(hub.cfg, configDir);
+  // Saved API requests live next to the settings file.
+  const catalog = new CatalogStore(join(configDir, CATALOG_FILE));
   // Saves run one at a time, so two quick saves cannot interleave their reconfigures.
   let saving: Promise<unknown> = Promise.resolve();
 
@@ -156,6 +160,7 @@ export function startServer(hub: Hub, uiDir: string, opts: ServerOptions): Promi
       }
 
       if (await tomcatRoute(hub.tomcat, req, res, path, json, readBody)) return;
+      if (await apiClientRoute(() => hub.cfg, hub.api, catalog, req, res, path, json, readBody)) return;
 
       if (path.startsWith('/api/')) return json(res, 404, { error: 'Not found' });
 

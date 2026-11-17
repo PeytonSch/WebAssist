@@ -1,6 +1,7 @@
 import type { WarInfo } from './tomcat';
 
-export type Source = 'browser' | 'tomcat' | 'postgres' | 'hub';
+/** 'client' is the API screen's requests, sent by the hub. */
+export type Source = 'browser' | 'tomcat' | 'postgres' | 'hub' | 'client';
 export type Kind = 'console' | 'request' | 'response' | 'log' | 'query' | 'stats' | 'marker';
 export type Level = 'debug' | 'info' | 'warn' | 'error';
 

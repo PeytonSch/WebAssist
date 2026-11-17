@@ -101,6 +101,12 @@ written with forward slashes or pasted as they are (`C:\Users\me\logs`).
 | `correlation.header` | `X-Request-Id` | Header that carries the request ID. |
 | `correlation.logPatterns` | `rid=…`, `requestId=…` | Regexes (one capture group) that find the ID in a log line or SQL comment. |
 | `correlation.timeWindowMs` | `2000` | Window for the timing fallback. |
+| `api.specs` | `[]` | OpenAPI/Swagger specs for the API screen: `{ "name", "url" }`, the URL an `http(s)://` or `file://` URL or a path (relative to the config file). |
+| `api.baseUrl` | (empty) | What `{{baseUrl}}` stands for, instead of the spec's servers. |
+| `api.headers` | `[]` | Default headers sent with every API request: `{ "name", "value" }`. **Stored as plain text.** |
+| `api.timeoutMs` | `30000` | How long an API request may take. |
+| `api.addRequestId` | `true` | Send `correlation.header` with a fresh ID on API requests, unless the request sets it. |
+| `api.insecureTls` | `false` | Accept self-signed and otherwise untrusted https certificates on API requests. |
 
 ## Collectors
 
@@ -265,6 +271,69 @@ Hub. Set it up under Settings → Tomcat → Management; the page says what is m
   changed. ZIP64 (over 4 GB) and encrypted WARs cannot be rewritten; deploy those without
   keeping files.
 
+## API client
+
+The **API** button in the top bar (or `#api`) opens a screen for calling your REST endpoints
+directly, and seeing what each call did on the server.
+
+- **Specs.** Add your OpenAPI 3.0/3.1 or Swagger 2.0 spec under Settings → API client: a URL
+  (Spring's springdoc serves it at `/v3/api-docs`, springfox at `/v2/api-docs`) or a file.
+  JSON is read as is; YAML through a small built-in reader that covers what specs use (block
+  maps and lists, quoted and block text, `[ ]` and `{ }`) and names the line of anything else
+  (anchors and aliases are not supported). **Load specs** in Settings checks each one. The
+  spec's operations are listed by tag, with their parameters, request body and responses;
+  `$ref`s within the spec are followed (references to other files are not). The server URL
+  comes from the spec (`servers`, or Swagger 2's `schemes`/`host`/`basePath`; relative ones
+  are resolved against the spec's URL) unless **Base URL** is set. Default headers are sent
+  when fetching a spec only from this machine or the base URL's host.
+- **Requests.** Pick an operation, or **+ New** for a request without a spec. The builder fills
+  in path, query, header and cookie parameters with the spec's examples (optional ones start
+  switched off; typing a value switches them on; enums become a menu), shows the default
+  headers from Settings (each can be turned off for the request, or overridden), and can
+  generate an example JSON body from the schema (`readOnly` properties are left out). A JSON
+  object body is form-encoded when the content type is `application/x-www-form-urlencoded`.
+  The URL line shows the URL as it will be sent. **Send** (`Ctrl+Enter`) sends it; **Cancel**
+  stops it. The values last used for each operation are remembered in the browser.
+- **How it is sent.** The hub sends the request itself, so CORS does not apply and any local
+  service can be reached. Redirects are returned as they are unless **Follow redirects** is on.
+  With `api.addRequestId` on, the request carries `correlation.header` with a fresh ID, so the
+  Tomcat log lines and queries it causes are linked to it on the timeline. Proxy variables
+  (`HTTP_PROXY`) are not used.
+- **Response.** Status, time, size, headers and the body (pretty-printed and highlighted;
+  binary bodies are not shown; up to 10 MB). **Show in timeline** closes the screen and selects
+  the request on the timeline, with its server events.
+- **On the timeline**, API requests are their own source (**API**), recorded like browser
+  requests: a request and its response, headers redacted per `redact.headers`, bodies cut at
+  `maxBodyBytes`.
+- **Saved requests.** **Save** puts the request in a catalog, with a name, a folder and a
+  description; the **Saved** list groups them by folder, and each can be sent at once (▶),
+  renamed or moved, duplicated or deleted. A request built from the spec is saved with
+  `{{baseUrl}}`, so it still works when the base URL changes. The catalog is
+  `api-requests.json` next to the settings file, so it can be backed up or put in git;
+  **Export** downloads it and **Import** merges a file into it (by id; variables by name) and
+  says what changed. An unreadable file is renamed aside, not overwritten.
+- **Variables.** `{{name}}` in a URL, parameter, header or body is filled in from
+  **Variables** (stored in the same file); `{{baseUrl}}` is built in. A request with an
+  unknown variable is not sent; the screen says which.
+- **History.** The last 50 sends are listed under **History** and can be opened again. They
+  are kept in the browser's local storage with the request's own headers, but not the default
+  headers from Settings.
+- **Recorded requests.** A browser (or API) request on the timeline offers **Replay** (send it
+  again now, through the hub, and select the new one), **Edit and send** (open it in the
+  builder) and **Save to catalog…**. Headers that cannot or should not be sent again are left
+  out (`Host`, `Content-Length`, `Connection`, `Accept-Encoding`, `sec-ch-*`, `sec-fetch-*`,
+  HTTP/2 pseudo-headers, the old request ID). A header redacted when it was recorded is sent
+  from the default headers if one has that name, and otherwise becomes `{{header-name}}`,
+  e.g. `{{authorization}}`, to fill in under Variables; Replay says so rather than sending
+  `[redacted]`. A body cut off at `maxBodyBytes` when recorded cannot be replayed. Chrome does
+  not report cookies with the request, so a cookie-based session has to be given as a
+  `Cookie` header.
+- **JSON viewer.** `src/ui/api.ts` exports `setJsonViewerOpener(fn)`; once given an opener, the
+  response pane shows **Open in JSON viewer** for JSON bodies.
+
+**Plain text:** default headers (`debug-hub.config.json`) and saved requests and variables
+(`api-requests.json`) are stored unencrypted. Keep real credentials out of files you share.
+
 ## Sessions and privacy
 
 Each session is one JSONL file in `sessions/`, one event per line, and is kept until you
@@ -273,6 +342,9 @@ delete it. `sessions/` is in `.gitignore`.
 Credential headers are redacted, but **session files can still contain personal data**:
 request and response bodies, URLs, query strings, log messages and SQL are stored as captured.
 Treat them like application logs.
+
+API client requests are recorded like browser requests: credential headers redacted, bodies
+kept up to `maxBodyBytes`.
 
 The API rejects requests whose `Host` is not `localhost` or `127.0.0.1`, and requests from
 other origins, so another site open in your browser cannot read a session.

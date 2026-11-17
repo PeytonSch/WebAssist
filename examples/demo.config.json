@@ -11,5 +11,8 @@
   "postgres": {
     "enabled": true,
     "logs": [".demo-logs/postgresql*.log"]
+  },
+  "api": {
+    "specs": [{ "name": "Demo shop", "url": "http://localhost:4010/v3/api-docs" }]
   }
 }

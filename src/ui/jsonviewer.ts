@@ -85,6 +85,8 @@ const V = {
   table: null as null | { node: JNode; path: Seg[]; rowPaths: Seg[][] | null; t: Table; order: number[] },
   tableSel: -1,
   returnFocus: null as Element | null,
+  /** The hash to go back to on close, e.g. #api when opened from the API screen. */
+  returnHash: '',
 };
 
 let onToggle: (open: boolean) => void = () => undefined;
@@ -1154,6 +1156,7 @@ export function openJsonViewer(src: JsonSource): void {
   if (!V.open) {
     V.open = true;
     V.returnFocus = document.activeElement;
+    V.returnHash = location.hash === '#json' ? '' : location.hash;
     rootEl().hidden = false;
     document.body.classList.add('json-open');
     if (location.hash !== '#json') history.replaceState(null, '', '#json');
@@ -1175,7 +1178,7 @@ export function closeJsonViewer(): void {
   rootEl().hidden = true;
   rootEl().replaceChildren();
   document.body.classList.remove('json-open');
-  if (location.hash === '#json') history.replaceState(null, '', location.pathname + location.search);
+  if (location.hash === '#json') history.replaceState(null, '', location.pathname + location.search + V.returnHash);
   onToggle(false);
   if (V.returnFocus instanceof HTMLElement && V.returnFocus.isConnected) V.returnFocus.focus({ preventScroll: true });
 }
