@@ -166,7 +166,33 @@ into the error above them.
   of the bottom. Follow then keeps the top of the list in view. The choice is remembered.
 - The session menu switches between the live session and saved ones.
 - Shortcuts: `/` search, `M` marker, `J`/`K` or arrows to move, `E` errors only, `F` follow,
-  `O` newest/oldest first, `R` reset filters, `Esc` close, `?` help.
+  `O` newest/oldest first, `R` reset filters, `V` JSON viewer, `Esc` close, `?` help.
+
+### JSON viewer
+
+JSON response and request bodies, the raw event, and console or log messages that contain a
+JSON object get a **JSON viewer** button in the detail panel (or press `V` with the event
+selected). It opens full-window over the timeline; `Esc` or **Back** returns to the same event.
+
+- **Tree**: open and close objects and arrays with the mouse or the arrow keys (`*` opens
+  everything below), or open 1, 2, 3 or all levels at once. Large bodies stay quick: only the
+  rows on screen are drawn.
+- **Selected value**: its path as `data.items[3].price` and as JSONPath `$.data.items[3].price`,
+  with Copy buttons, plus Copy value (as JSON) and the whole value. A string that holds JSON
+  can be opened as JSON in its own view.
+- **Find** searches keys and values; `Enter` / `Shift+Enter` step through the matches, and
+  "Only matching" hides the branches without one.
+- **Path** shows part of the document: `data.items`, `items[0].name`, `items[*].price`,
+  `items[-1]`, `items[1:3]`, `..id` (any depth), `["a-b"]`, and filters such as
+  `items[?(@.price > 10 && @.status == "open")]`. Copied paths can be pasted back in.
+- **Table** shows an array of objects (by default the first one in the body, or the selected
+  one) with a column per key; click a header to sort, a `{…}` or `[…]` cell to open it.
+- **Raw** is the pretty-printed text. Copy all and Download save the JSON.
+
+Numbers are shown exactly as sent, so 64-bit IDs are not rounded (they are marked "big").
+When a body was cut off at the body size limit, the viewer shows what was captured, says so,
+and marks the values that were cut off; raise "Body size limit" in Settings to capture more.
+Text that is not valid JSON is shown as captured, with the position of the error marked.
 
 ## Tomcat page and WAR deploys
 

@@ -3,6 +3,8 @@ import type { HubEvent, HubStatus, Level, ServerMessage, SessionInfo } from '../
 import { CHROME_LAUNCH_EVENT, chromeButton, chromeLaunching, chromeLaunchNote, startChrome } from './chrome';
 import { $, fmtBytes, h, type Child } from './dom';
 import { bodyLang, highlight, paint, type Lang, type Token } from './highlight';
+import { findJsonIn } from './jsonmodel';
+import { closeJsonViewer, initJsonViewer, jsonViewerOpen, openJsonViewer, type JsonSource } from './jsonviewer';
 import { initSettings, openSettings, settingsOpen, updateSettingsStatus } from './settings';
 import { initTitlebar } from './titlebar';
 import { closeTomcat, initTomcat, onWarNotice, openTomcat, syncWarNotices, tomcatOpen } from './tomcat';
@@ -690,13 +692,102 @@ function prettyBody(body: string, mime?: string | null): string {
   return body;
 }
 
-function bodySection(title: string, d: Record<string, any>, mime?: string | null): HTMLElement | null {
+// ── JSON viewer sources ─────────────────────────────────
+
+/** Opens the full-window JSON viewer, which hides the panel; not over Settings or Tomcat. */
+function viewJson(src: JsonSource | null): void {
+  if (src && !settingsOpen() && !tomcatOpen()) openJsonViewer(src);
+}
+
+/** "JSON viewer" button for a section head: placed before its Copy button. */
+function withJsonButton(sec: HTMLElement, src: JsonSource | null, where: Element | null = sec.querySelector('.sec-head')): HTMLElement {
+  if (!src || !where) return sec;
+  const btn = h('button', { class: 'btn copy jv-open', type: 'button', title: 'Explore this JSON full-window: tree, table, search and paths (V)' }, 'JSON viewer');
+  btn.onclick = (e) => {
+    // Inside the raw event's <summary>, a click would also fold the section.
+    e.preventDefault();
+    e.stopPropagation();
+    viewJson(src);
+  };
+  where.insertBefore(btn, where.querySelector(':scope > .copy'));
+  return sec;
+}
+
+/** Path and query of a URL, for headers: "/api/orders?page=2". */
+function shortUrl(url: string | undefined): string {
+  if (!url) return '';
+  try {
+    const u = new URL(url);
+    return (u.pathname + u.search).slice(0, 160);
+  } catch {
+    return url.slice(0, 160);
+  }
+}
+
+/** The response or request body of a browser request, when it is JSON. */
+function bodySource(row: Row, which: 'response' | 'request'): JsonSource | null {
+  if (groupOf(row) !== 'network' || row.ev.source !== 'browser') return null;
+  const req = row.ev.kind === 'request' ? row.ev.data : {};
+  const d: Record<string, any> = which === 'response' ? resOf(row)?.data ?? {} : req;
+  if (typeof d.body !== 'string' || d.body.trim() === '') return null;
+  if (bodyLang(d.body, which === 'response' ? d.mimeType : undefined) !== 'json') return null;
+  const status = which === 'response' ? statusOf(row) : null;
+  const name = (shortUrl(row.ev.data.url).split('?')[0].split('/').filter(Boolean).pop() ?? 'body').replace(/[^\w.-]+/g, '_');
+  return {
+    title: which === 'response' ? 'Response body' : 'Request body',
+    meta: [`${row.ev.data.method ?? ''} ${shortUrl(row.ev.data.url)}`.trim(), status != null ? String(status) : '', fmtBytes(d.bodyBytes ?? d.body.length)].filter(Boolean),
+    text: d.body,
+    fileName: `${name}-${which}.json`,
+    truncated: d.bodyTruncated ? { captured: new Blob([d.body]).size, total: d.bodyBytes } : null,
+  };
+}
+
+/** The text of a console or log message. */
+function messageText(row: Row): string | null {
+  const d = row.ev.data;
+  const g = groupOf(row);
+  if (g === 'console') return d.stack && !String(d.text).includes('\n    at ') ? `${d.text}\n${d.stack}` : d.text ?? null;
+  if (g === 'log') return d.message ?? null;
+  return null;
+}
+
+/** A JSON object inside a console or log message ("Saved order {…}"), if there is one. */
+function messageSource(row: Row): JsonSource | null {
+  const text = messageText(row);
+  const found = text ? findJsonIn(text) : null;
+  if (!found) return null;
+  return {
+    title: groupOf(row) === 'console' ? 'Console message' : 'Log message',
+    meta: [row.ev.summary.slice(0, 120)],
+    text: found.text,
+    fileName: `${groupOf(row)}-message.json`,
+  };
+}
+
+function rawSource(row: Row): JsonSource {
+  const res = resOf(row);
+  return {
+    title: 'Raw event',
+    meta: [row.ev.summary.slice(0, 120)],
+    text: JSON.stringify(res && res !== row.ev ? [row.ev, res] : row.ev),
+    fileName: `event-${row.ev.id}.json`.replace(/[^\w.-]+/g, '_'),
+  };
+}
+
+/** What V opens: a JSON body, else JSON in the message, else the raw event. */
+function jsonForSelected(): JsonSource | null {
+  const row = state.selected;
+  if (!row) return null;
+  return bodySource(row, 'response') ?? bodySource(row, 'request') ?? messageSource(row) ?? rawSource(row);
+}
+
+function bodySection(title: string, d: Record<string, any>, mime?: string | null, json: JsonSource | null = null): HTMLElement | null {
   if (typeof d.body !== 'string') {
     return d.bodyUnavailable ? section(title, h('div', { class: 'rel-empty' }, 'Chrome had already discarded this body.')) : null;
   }
   if (d.body === '') return section(title, h('div', { class: 'rel-empty' }, 'Empty body.'));
   const text = prettyBody(d.body, mime);
-  const el = section(title, code(text, bodyLang(text, mime)), { note: fmtBytes(d.bodyBytes), copy: text });
+  const el = withJsonButton(section(title, code(text, bodyLang(text, mime)), { note: fmtBytes(d.bodyBytes), copy: text }), json);
   if (d.bodyTruncated) {
     el.append(h('div', { class: 'notice' }, `Truncated: showing the first ${fmtBytes(new Blob([d.body]).size)} of ${fmtBytes(d.bodyBytes)}.`));
   }
@@ -846,18 +937,18 @@ function renderDetail(): void {
   }
 
   if (g === 'network' && row.ev.source === 'browser') {
-    add(bodySection('Response body', rd, rd.mimeType));
-    add(bodySection('Request body', row.ev.kind === 'request' ? d : {}));
+    add(bodySection('Response body', rd, rd.mimeType, bodySource(row, 'response')));
+    add(bodySection('Request body', row.ev.kind === 'request' ? d : {}, undefined, bodySource(row, 'request')));
     add(headersSection('Response headers', rd.headers));
     add(headersSection('Request headers', row.ev.kind === 'request' ? d.headers : undefined));
   } else if (g === 'console') {
     const text = d.stack && !String(d.text).includes('\n    at ') ? `${d.text}\n${d.stack}` : d.text;
-    add(section('Message', code(text ?? '', 'log'), { copy: text ?? '' }));
+    add(withJsonButton(section('Message', code(text ?? '', 'log'), { copy: text ?? '' }), messageSource(row)));
   } else if (g === 'log') {
-    add(section(d.stackFrames ? 'Stack trace' : 'Message', code(d.message ?? '', 'log'), {
+    add(withJsonButton(section(d.stackFrames ? 'Stack trace' : 'Message', code(d.message ?? '', 'log'), {
       note: d.lines > 1 ? `${d.lines} lines` : undefined,
       copy: d.message ?? '',
-    }));
+    }), messageSource(row)));
   } else if (g === 'query') {
     if (d.statement) add(section('Statement', code(d.statement, 'sql'), { copy: d.statement }));
     if (d.plan) {
@@ -871,6 +962,7 @@ function renderDetail(): void {
   }
 
   const raw = h('details', { class: 'raw' }, h('summary', {}, 'Raw event'));
+  withJsonButton(raw, rawSource(row), raw.firstElementChild);
   raw.addEventListener('toggle', () => {
     if (raw.childElementCount === 1) raw.append(code(JSON.stringify(res && res !== row.ev ? [row.ev, res] : row.ev, null, 2), 'json'));
   });
@@ -1162,17 +1254,26 @@ function init(): void {
   // One full-window screen at a time: opening Settings (also from the menu or a link) closes Tomcat.
   initSettings({
     onToggle: (open) => {
-      if (open) closeTomcat();
+      if (open) {
+        closeTomcat();
+        closeJsonViewer();
+      }
       renderList();
     },
   });
   $('btn-settings').onclick = () => openSettings();
-  initTomcat({ onToggle: () => renderList() });
+  initTomcat({
+    onToggle: (open) => {
+      if (open) closeJsonViewer();
+      renderList();
+    },
+  });
+  initJsonViewer({ onToggle: () => renderList() });
   $('btn-tomcat').onclick = () => openTomcat();
 
   document.addEventListener('keydown', (e) => {
-    // The settings and Tomcat screens have their own keys.
-    if (settingsOpen() || tomcatOpen()) return;
+    // The settings, Tomcat and JSON viewer screens have their own keys.
+    if (settingsOpen() || tomcatOpen() || jsonViewerOpen()) return;
     const target = e.target as HTMLElement;
     const typing = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT';
     if (e.key === 'Escape') {
@@ -1197,6 +1298,7 @@ function init(): void {
         break;
       }
       case 'r': case 'R': setFilters({ ...DEFAULT_FILTERS }); break;
+      case 'v': case 'V': viewJson(jsonForSelected()); break;
       case '?': help.showModal(); break;
     }
   });
