@@ -156,8 +156,9 @@ opens the menu, and the top bar drags the window (double-click to maximize).
 ## Go to source
 
 Java classes in Tomcat log entries open in your editor at the line: stack frames from your own
-code, the logger (shown under Log entry) and exception classes become links (underlined on
-hover, with a small ↗). Click one, or focus it with `Tab` and press `Enter`. **Go to source**
+code, the logger (shown under Log entry), exception classes, and fully qualified class names
+anywhere in the message (`Registered bean of type com.example.orders.OrderService`) become
+links (underlined on hover, with a small ↗). Click one, or focus it with `Tab` and press `Enter`. **Go to source**
 under the log entry (or `G`) opens the top frame from your code, else the logger's class. Library
 frames stay plain. When two projects or modules define the same class, the one whose WAR the
 event's webapp was deployed from is used; otherwise a dialog asks which.

@@ -732,8 +732,8 @@ pre.code.nowrap { white-space: pre; overflow-wrap: normal; }
 .src-link { cursor: pointer; border-radius: 3px; }
 .src-link:hover { text-decoration: underline; text-underline-offset: 2px; }
 .src-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; text-decoration: underline; }
-.hl-fn.src-link { color: var(--accent); }
-:is(.hl-loc, .hl-logger, .hl-exc, .fact-src).src-link::after {
+.hl-fn.src-link, .hl-cls.src-link { color: var(--accent); }
+:is(.hl-loc, .hl-logger, .hl-exc, .hl-cls, .fact-src).src-link::after {
   content: "↗";
   margin-left: 1px;
   font-size: 0.85em;

@@ -594,6 +594,12 @@ const PATH = /\/[\w.~%-]+(?:\/[\w.~%-]*)*(?:\?[^\s"'<>()]*[^\s"'<>().,;:!?])?/y;
 const NUM = /\d+(?:\.\d+)?(?:ms|s|kB|KB|MB|GB|B|%)?(?![\w.])/y;
 const WORD = /[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*/y;
 const EXC_WORD = /(?:^|\.)[A-Z][\w$]*(?:Exception|Error|Throwable)$/;
+/**
+ * A fully qualified class named in running text ("Loaded com.example.orders.OrderService",
+ * "calling com.x.Foo.bar"): lower-case packages, then a capitalised class, maybe a method. Only
+ * a candidate for Go to source; it becomes a link if the class is in your sources.
+ */
+const CLASS_IN_TEXT = /^((?:[a-z_][\w]*\.)+[A-Z][\w$]*)(?:\.[a-z_$][\w$]*)?$/;
 const QUOTE_MAX = 300;
 
 /** Free text such as a log message. Untouched characters get `base` (e.g. an exception message). */
@@ -614,7 +620,13 @@ function tokText(out: Out, s: string, base?: string): void {
       } else {
         m = sc.at(WORD)!;
         const w = m[0];
+        const cls = CLASS_IN_TEXT.exec(w);
         if (EXC_WORD.test(w)) sc.emit(w.length, 'exc', w.includes('.') ? javaRef(w) : null);
+        else if (cls && !isWordChar(prev) && prev !== '.') {
+          // A ":87" right after it is a line, as some layouts print "com.x.Foo:87".
+          const line = /^:(\d+)\b/.exec(s.slice(sc.i + w.length));
+          sc.emit(w.length + (line ? line[0].length : 0), 'cls', javaRef(cls[1], undefined, line ? Number(line[1]) : undefined));
+        }
         else if (s[sc.i + w.length] === '=' && s[sc.i + w.length + 1] !== '=' && !isWordChar(prev)) sc.emit(w.length, 'key');
         else sc.i += w.length;
       }

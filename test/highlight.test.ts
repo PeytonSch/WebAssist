@@ -142,6 +142,12 @@ describe('logs and stack traces', () => {
       ['fn', 'QueryExecutorImpl.receiveErrorResponse', { cls: 'org.postgresql.core.v3.QueryExecutorImpl', file: 'QueryExecutorImpl.java', line: 2713 }],
       ['loc', 'QueryExecutorImpl.java:2713', { cls: 'org.postgresql.core.v3.QueryExecutorImpl', file: 'QueryExecutorImpl.java', line: 2713 }],
     ]);
+    // Classes named in the message itself, not only as the logger.
+    const mention = highlight('2026-11-17 10:00:00.123 INFO [main] Registered com.example.orders.OrderService and calls com.example.orders.OrderController.getOrder:42; not e.g. example.com or System.out', 'log');
+    expect(mention.filter((x) => x.cls === 'cls').map((x) => [x.text, x.ref])).toEqual([
+      ['com.example.orders.OrderService', { cls: 'com.example.orders.OrderService' }],
+      ['com.example.orders.OrderController.getOrder:42', { cls: 'com.example.orders.OrderController', line: 42 }],
+    ]);
     const inner = highlight('\tat com.x.Foo$Bar.lambda$run$0(Foo.kt:12)\n\tat com.x.Gen.call(Unknown Source)', 'log');
     expect(inner.filter((x) => x.ref).map((x) => x.ref)).toEqual([
       { cls: 'com.x.Foo$Bar', file: 'Foo.kt', line: 12 },

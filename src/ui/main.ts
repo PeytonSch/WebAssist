@@ -1016,7 +1016,7 @@ function renderDetail(): void {
       ['Thread', d.thread], ['Severity', d.severity], ['Request ID', ridOf(row)], ['File', d.file],
     ]));
     // Only entries that name a class: not Debug Hub's own notes (Start Tomcat, WAR builds).
-    if (row.ev.source === 'tomcat' && (d.logger || d.exception || d.stackFrames)) entry.append(sourceActions());
+    if (row.ev.source === 'tomcat' && (d.logger || d.exception || d.stackFrames || MENTIONS_CLASS.test(d.message ?? ''))) entry.append(sourceActions());
     add(entry);
   } else if (g === 'query') {
     add(section('Query', facts([
@@ -1072,6 +1072,9 @@ function renderDetail(): void {
   refreshRelated();
   finder.refresh(newEvent);
 }
+
+/** A fully qualified class name anywhere in a message, as highlight.ts links them. */
+const MENTIONS_CLASS = /(?:^|[^\w.$])(?:[a-z_]\w*\.)+[A-Z][\w$]*/;
 
 /** The Go to source button of a Tomcat log entry. */
 function sourceActions(): HTMLElement {
