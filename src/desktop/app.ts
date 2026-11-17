@@ -3,10 +3,11 @@ import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { environmentReport, startHub, type RunningHub } from '../server/embed';
 import {
-  checkEveryMs, checkForGitUpdate, describeUpdate, dismiss, dismissedTarget, fetchCommandFrom, fetchDiagnostics, fetchNote, findRepo,
+  checkEveryMs, checkForGitUpdate, dismiss, dismissedTarget, fetchCommandFrom, fetchDiagnostics, fetchNote, findRepo,
   gitRunner, gitUpdatesEnabled, proxyFromPac, remoteHttpUrl, startGitUpdate, type FetchOptions, type GitUpdateStatus,
 } from '../shell/gitupdate';
 import type { ShellContext } from '../shell/main';
+import { availableView, saveTheme, showUpdateWindow, themeOf } from '../shell/updatewindow';
 
 /**
  * Entry point of the payload: the part of the desktop app that updates. The shell calls `run`
@@ -152,6 +153,7 @@ export async function run(ctx: ShellContext): Promise<void> {
     win.once('ready-to-show', () => {
       win.show();
       resolve();
+      void themeOf(win).then((t) => saveTheme(ctx.userData, t));
     });
     win.webContents.once('did-fail-load', (_e, code, desc) => reject(new Error(`UI failed to load: ${desc} (${code})`)));
     // On the very first run, open straight into Settings so the app can be pointed at the logs.
@@ -206,23 +208,16 @@ function watchGitUpdates(repo: string, win: BrowserWindow, ctx: ShellContext) {
   };
 
   const offer = async (status: Extract<GitUpdateStatus, { state: 'available' }>, fromMenu: boolean, opts: FetchOptions): Promise<void> => {
-    const { message, detail } = describeUpdate(status);
     asking = true;
     try {
+      const theme = await themeOf(win);
+      saveTheme(ctx.userData, theme);
+      const choice = await showUpdateWindow(await availableView(git, status), { parent: win, theme, git });
       if (status.blocked) {
-        await dialog.showMessageBox(win, { type: 'info', message, detail, buttons: ['OK'] });
         dismiss(ctx.userData, status.target);
         return;
       }
-      const { response } = await dialog.showMessageBox(win, {
-        type: 'info',
-        message,
-        detail,
-        buttons: ['Update and restart', 'Later'],
-        defaultId: 0,
-        cancelId: 1,
-      });
-      if (response !== 0) {
+      if (choice !== 'update') {
         // Asked from the menu, Later only closes the question; from the timer it is remembered.
         if (!fromMenu) dismiss(ctx.userData, status.target);
         return;
@@ -239,6 +234,8 @@ function watchGitUpdates(repo: string, win: BrowserWindow, ctx: ShellContext) {
 
   const check = async (): Promise<void> => {
     if (asking || quitting || win.isDestroyed()) return;
+    // The update window at the next start shows in this theme too.
+    saveTheme(ctx.userData, await themeOf(win));
     const { status, opts } = await checkOnce();
     if (status.state !== 'available' || status.target === dismissedTarget(ctx.userData) || asking || quitting) return;
     await offer(status, false, opts);
@@ -254,19 +251,30 @@ function watchGitUpdates(repo: string, win: BrowserWindow, ctx: ShellContext) {
       if (asking || quitting) return;
       const { status, opts } = await checkOnce();
       if (status.state === 'available') return offer(status, true, opts);
-      await dialog.showMessageBox(win, status.state === 'up-to-date'
-        ? {
-            type: status.fetchError ? 'warning' : 'info',
-            message: status.fetchError ? 'Could not reach GitHub to check for updates' : 'Debug Hub is up to date',
-            detail: status.fetchError
-              ? `${fetchNote(status)}\n\nAs of that fetch the checkout is up to date (${status.head.slice(0, 7)}). Details are in shell.log.`
-              : `The checkout is at origin/main (${status.head.slice(0, 7)}).`,
-          }
-        : {
-            type: 'warning',
-            message: 'Could not check for updates',
-            detail: `${status.message}\n\nIf your terminal can fetch, set Settings › Advanced › Fetch updates with to a command that does it the same way, e.g. nu -l -c "git fetch origin main". Details are in shell.log.`,
-          });
+      asking = true;
+      try {
+        const theme = await themeOf(win);
+        saveTheme(ctx.userData, theme);
+        const ok = [{ id: 'ok', label: 'OK', primary: true }];
+        await showUpdateWindow(status.state === 'up-to-date'
+          ? status.fetchError
+            ? {
+                mode: 'message', tone: 'warn', title: 'Could not reach GitHub to check for updates',
+                detail: `${fetchNote(status)}\n\nAs of that fetch the checkout is up to date. Details are in shell.log.`,
+                head: status.head, actions: ok, cancel: 'ok',
+              }
+            : {
+                mode: 'message', tone: 'ok', title: 'You’re up to date',
+                detail: 'Debug Hub is at the latest commit on origin/main.', head: status.head, actions: ok, cancel: 'ok',
+              }
+          : {
+              mode: 'message', tone: 'warn', title: 'Could not check for updates',
+              detail: `${status.message}\n\nIf your terminal can fetch, set Settings › Advanced › Fetch updates with to a command that does it the same way, e.g. nu -l -c "git fetch origin main". Details are in shell.log.`,
+              actions: ok, cancel: 'ok',
+            }, { parent: win, theme });
+      } finally {
+        asking = false;
+      }
     },
   };
 }

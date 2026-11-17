@@ -86,8 +86,10 @@ Chrome, Tomcat and Postgres and prints what it finds (see `docs/environment.md`)
 ### Keeping it up to date
 
 Run this way, Debug Hub keeps itself up to date with `main`. It checks for new commits when it
-starts (on the splash screen) and every 5 minutes, lists them, and on **Update and restart**
-runs `git pull`, then `npm install` if the dependencies changed, then `npm run app` again.
+starts (on the splash screen) and every 5 minutes, and shows what is new in its update window:
+each commit with its message and files, and every changed file with its diff. On **Update and
+restart** it runs `git pull`, then `npm install` if the dependencies changed, then `npm run app`
+again.
 **File → Check for Updates…** checks now. It leaves the update to you when the checkout is on
 another branch or has changes of its own; then it is the usual:
 
@@ -96,6 +98,8 @@ git pull
 npm install        # when package.json changed
 npm run app
 ```
+
+![The update window: the new commits, tagged and expandable to their messages and diffs](docs/images/update.png)
 
 Details, and how to turn it off: [docs/updates.md](docs/updates.md).
 

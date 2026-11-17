@@ -380,3 +380,82 @@ export function takeUpdateResult(userData: string): UpdateResult | null {
 }
 
 export const updateLogFile = (userData: string) => join(userData, 'git-update.log');
+
+// ── What an update brings, for the update window ────────
+
+export interface FileStat {
+  path: string;
+  /** null for a binary file. */
+  added: number | null;
+  deleted: number | null;
+}
+
+export interface UpdateCommit extends GitCommit {
+  /** The message after the subject, trimmed; '' when there is none. */
+  body: string;
+  /** Committer date, ISO. */
+  date: string;
+  files: FileStat[];
+}
+
+export interface UpdateDetails {
+  /** Newest first, at most `max`. */
+  commits: UpdateCommit[];
+  /** Everything that changes between the checkout and origin/main. */
+  files: FileStat[];
+  added: number;
+  deleted: number;
+  /** package.json or package-lock.json changes, so npm install will run. */
+  dependencies: boolean;
+}
+
+const RS = '\x1e';
+const US = '\x1f';
+
+/** `git diff --numstat` lines: "12\t3\tpath", or "-\t-\tpath" for a binary file. */
+export function parseNumstat(text: string): FileStat[] {
+  return text.split('\n').map((l) => l.replace(/\r$/, '')).filter((l) => /^(\d+|-)\t(\d+|-)\t./.test(l)).map((l) => {
+    const [a, d, ...rest] = l.split('\t');
+    return { path: rest.join('\t'), added: a === '-' ? null : Number(a), deleted: d === '-' ? null : Number(d) };
+  });
+}
+
+/** Parses `git log --format=<RS>%h<US>%an<US>%cr<US>%cI<US>%s<US>%b<US> --numstat`. */
+export function parseDetailedLog(text: string): UpdateCommit[] {
+  return text.split(RS).filter((r) => r.includes(US)).map((record) => {
+    const [sha, author, when, date, subject, body, numstat = ''] = record.split(US);
+    return { sha: sha.trim(), author, when, date, subject, body: body.trim(), files: parseNumstat(numstat) };
+  });
+}
+
+/**
+ * The commits and files between `head` and `target` (origin/main), for the update window. Paths
+ * are shown as git has them; renames show as a delete and an add, which reads fine in a list.
+ */
+export async function updateDetails(git: GitRunner, head: string, target: string, max = 60): Promise<UpdateDetails> {
+  const log = await git(['log', '--no-merges', '--no-renames', '-n', String(max), `--format=${RS}%h${US}%an${US}%cr${US}%cI${US}%s${US}%b${US}`, '--numstat', `${head}..${target}`]);
+  const files = parseNumstat(await git(['diff', '--no-renames', '--numstat', head, target]));
+  const sum = (k: 'added' | 'deleted') => files.reduce((n, f) => n + (f[k] ?? 0), 0);
+  return {
+    commits: parseDetailedLog(log),
+    files,
+    added: sum('added'),
+    deleted: sum('deleted'),
+    dependencies: files.some((f) => f.path === 'package.json' || f.path === 'package-lock.json'),
+  };
+}
+
+/** Longer diffs are cut here; the window says so. */
+export const MAX_DIFF_BYTES = 512 * 1024;
+
+/**
+ * One file's unified diff: across the whole update, or in one commit when `sha` is given. Only
+ * paths and commits the window was shown are asked for (src/shell/updatewindow.ts checks).
+ */
+export async function fileDiff(git: GitRunner, path: string, range: { head: string; target: string } | { sha: string }): Promise<{ text: string; truncated: boolean }> {
+  const args = 'sha' in range
+    ? ['show', '--no-color', '--no-ext-diff', '--no-renames', '--format=', range.sha, '--', path]
+    : ['diff', '--no-color', '--no-ext-diff', '--no-renames', range.head, range.target, '--', path];
+  const text = await git(args, 15_000);
+  return text.length > MAX_DIFF_BYTES ? { text: text.slice(0, text.lastIndexOf('\n', MAX_DIFF_BYTES)), truncated: true } : { text, truncated: false };
+}

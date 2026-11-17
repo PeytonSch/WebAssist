@@ -3,11 +3,12 @@ import { appendFileSync, existsSync, mkdirSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { join } from 'node:path';
 import {
-  checkForGitUpdate, describeUpdate, fetchCommandFrom, fetchDiagnostics, findRepo, gitRunner, gitUpdatesEnabled, proxyFromPac,
+  checkForGitUpdate, fetchCommandFrom, fetchDiagnostics, findRepo, gitRunner, gitUpdatesEnabled, proxyFromPac,
   remoteHttpUrl, startGitUpdate, takeUpdateResult, updateLogFile, type FetchOptions, type GitRunner,
   type UpdateResult as GitUpdateResult,
 } from './gitupdate';
 import { Updater, type PayloadInfo, type UpdateResult } from './updater';
+import { availableView, savedTheme, showUpdateWindow } from './updatewindow';
 
 /**
  * The shell: the part that is installed once and does not update itself. It shows the splash
@@ -129,16 +130,12 @@ async function gitUpdateAtStartup(repo: string): Promise<boolean> {
   // Can't be applied automatically (local changes, another branch): not worth stopping every
   // start for; the running app mentions it once (src/desktop/app.ts).
   if (status.state !== 'available' || status.blocked) return false;
-  const { message, detail } = describeUpdate(status);
-  const { response } = await dialog.showMessageBox(splash!, {
-    type: 'info',
-    message,
-    detail,
-    buttons: ['Update and restart', 'Not now'],
-    defaultId: 0,
-    cancelId: 1,
-  });
-  if (response !== 0) return false;
+  setStatus({ text: 'An update is available' });
+  const choice = await showUpdateWindow(await availableView(git, status, 'Not now'), { parent: splash, theme: savedTheme(userData), git });
+  if (choice !== 'update') {
+    setStatus({ text: 'Starting…' });
+    return false;
+  }
   setStatus({ text: 'Updating…' });
   startGitUpdate(repo, userData, fetchOptions);
   log(`git update started: ${status.head.slice(0, 7)} → ${status.target.slice(0, 7)}`);
@@ -150,11 +147,16 @@ async function reportGitUpdate(r: GitUpdateResult | null): Promise<void> {
   if (!r) return;
   log(`git update result: ${JSON.stringify(r)}`);
   if (r.ok) return;
-  await dialog.showMessageBox({
-    type: 'warning',
-    message: 'Debug Hub could not update',
-    detail: `${r.error ?? 'Unknown error'}\n\nThe version that was there has been started again. Details: ${updateLogFile(userData)}`,
-  });
+  const choice = await showUpdateWindow({
+    mode: 'message',
+    tone: 'error',
+    title: 'Debug Hub could not update',
+    detail: `${r.error ?? 'Unknown error'}\n\nThe version that was there has been started again.`,
+    head: r.to || r.from,
+    actions: [{ id: 'log', label: 'Open update log' }, { id: 'ok', label: 'OK', primary: true }],
+    cancel: 'ok',
+  }, { parent: BrowserWindow.getAllWindows().find((w) => w !== splash) ?? null, theme: savedTheme(userData) });
+  if (choice === 'log') void electronShell.openPath(updateLogFile(userData));
 }
 
 async function main(): Promise<void> {

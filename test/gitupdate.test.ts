@@ -5,7 +5,7 @@ import { join, resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   ago, checkForGitUpdate, describeUpdate, dismiss, dismissedTarget, fetchCommandFrom, fetchRemote, findRepo, gitRunner, proxyFromPac,
-  takeUpdateResult, type GitRunner,
+  takeUpdateResult, type GitRunner, fileDiff, updateDetails,
 } from '../src/shell/gitupdate';
 
 const HELPER = resolve('scripts/update-and-restart.mjs');
@@ -119,6 +119,29 @@ describe('checkForGitUpdate', () => {
     expect(await check({ command })).toMatchObject({ state: 'available', behind: 1, fetchError: null });
     expect(readFileSync(marker, 'utf8')).toBe('x');
     expect(await check({ command: ['no-such-program-xyz'] })).toMatchObject({ fetchError: expect.stringMatching(/no-such-program-xyz was not found/) });
+  });
+});
+
+describe('updateDetails', () => {
+  it('lists the commits with their files and messages, and the files of the whole update', async () => {
+    publish('notes.md', 'one\n', 'Add notes\n\nWith a body line.');
+    publish('package.json', JSON.stringify({ name: 'debug-hub', private: true, version: 2 }), 'Bump version');
+    const s = await check();
+    if (s.state !== 'available') throw new Error(s.state);
+    const runner = gitRunner(checkout);
+    const d = await updateDetails(runner, s.head, s.target);
+    expect(d.commits.map((c) => c.subject)).toEqual(['Bump version', 'Add notes']);
+    expect(d.commits[1].body).toBe('With a body line.');
+    expect(d.commits[1].files).toEqual([{ path: 'notes.md', added: 1, deleted: 0 }]);
+    expect(d.commits[0].date).toMatch(/^\d{4}-\d\d-\d\dT/);
+    expect(d.files.map((f) => f.path).sort()).toEqual(['notes.md', 'package.json']);
+    expect(d.dependencies).toBe(true);
+    expect(d.added).toBe(2);
+
+    const whole = await fileDiff(runner, 'notes.md', { head: s.head, target: s.target });
+    expect(whole.text).toContain('+one');
+    const one = await fileDiff(runner, 'package.json', { sha: d.commits[0].sha });
+    expect(one.text).toMatch(/^-.*"scripts"/m);
   });
 });
 

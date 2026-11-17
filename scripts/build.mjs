@@ -1,7 +1,8 @@
 // Builds everything into dist/:
 //   cli.js, ui/        the command-line hub (npm start)
 //   payload/           what the desktop app downloads on update: app.cjs + preload.cjs + ui/ + payload.json
-//   shell/             the installed desktop shell: main.cjs, preload.cjs, splash.html
+//                      (+ update.html, update-preload.cjs: the update window, see src/shell/updatewindow.ts)
+//   shell/             the installed desktop shell: main.cjs, preload.cjs, splash.html, update.html + update-preload.cjs
 // With --release it also writes release/latest.json and the packed payload for a GitHub Release.
 import { build } from 'esbuild';
 import { createHash } from 'node:crypto';
@@ -34,6 +35,16 @@ await writeFile('dist/payload/payload.json', JSON.stringify({ version: pkg.versi
 await build({ ...node, entryPoints: ['src/shell/main.ts'], outfile: 'dist/shell/main.cjs', format: 'cjs', external: ['electron'] });
 await build({ ...node, entryPoints: ['src/shell/preload.ts'], outfile: 'dist/shell/preload.cjs', format: 'cjs', external: ['electron'] });
 await cp('src/shell/splash.html', 'dist/shell/splash.html');
+
+// The update window (src/shell/updatewindow.ts) is opened by the shell at start and by the
+// running app, so both get a copy: its page with the script inlined, and its preload.
+const view = await build({ ...common, entryPoints: ['src/shell/updateview.ts'], format: 'iife', target: 'es2022', minify: true, write: false });
+const viewJs = view.outputFiles[0].text.replace(/<\/script/gi, '<\\/script');
+const updateHtml = (await readFile('src/shell/update.html', 'utf8')).replace('/*__UPDATE_VIEW__*/', () => viewJs);
+for (const dir of ['dist/shell', 'dist/payload']) {
+  await writeFile(join(dir, 'update.html'), updateHtml);
+  await build({ ...node, entryPoints: ['src/shell/updatepreload.ts'], outfile: join(dir, 'update-preload.cjs'), format: 'cjs', external: ['electron'] });
+}
 
 if (process.argv.includes('--release')) {
   // Same format as packPayload() in src/shell/updater.ts: gzip(JSON { files: { path: base64 } }).

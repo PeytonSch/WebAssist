@@ -71,7 +71,14 @@ Run from a clone with `npm run app`, the app keeps that clone up to date with `o
 instead of using releases:
 
 - **At start**, the splash fetches `origin/main` (8 s limit; offline, it just starts). If there
-  are new commits it lists them and offers **Update and restart** or **Not now**.
+  are new commits it opens the update window and offers **Update and restart** or **Not now**.
+- **The update window** (`src/shell/updatewindow.ts`, in the app's theme) has two tabs. *What's
+  new* lists the commits, newest first, each tagged New, Fix, Improved, Docs or Tests from its
+  subject, with its author, age and size; click one for its full message and its files, and a
+  file for that commit's diff. *Files changed* lists every file the update touches, by folder,
+  beside a diff viewer (line numbers, the changed words within a line marked). It says when
+  `npm install` will run, when the check could not reach GitHub, and when the checkout cannot be
+  updated automatically. Enter updates, Escape is Later.
 - **While it runs**, it checks every 5 minutes and asks the same way. **Later** is remembered
   for those commits: it asks again only once `main` has moved on. **File › Check for Updates…**
   checks now.
