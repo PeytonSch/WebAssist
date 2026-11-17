@@ -549,6 +549,13 @@ main {
   font-variant-ligatures: none;
 }
 .lvl-error .text { color: var(--error); }
+/* Network rows: the route ("user/id") stands out, the IDs and query that vary are muted. */
+.text .route { font-weight: 650; color: var(--text); }
+.lvl-error .text .route { color: var(--error); }
+.route-rest { color: var(--muted); }
+.route-fact { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; }
+.route-fact code { font: 12px var(--mono); }
+.route-fact .btn-sm { height: 24px; padding: 0 8px; font-size: 11.5px; }
 .linked { flex: none; color: var(--accent); display: inline-flex; }
 
 .pill {

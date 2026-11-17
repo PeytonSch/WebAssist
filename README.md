@@ -176,6 +176,14 @@ into the error above them.
   / `Shift+Enter` or `F3` / `Shift+F3` move between matches, which are highlighted, and `Esc`
   clears it. `Aa` makes it case-sensitive and `.*` takes a regular expression. The query stays
   when you select another event, so you can step through events looking for the same text.
+- Network rows show the request's **route** in bold, with the parts that vary muted after it:
+  `/user/id/12345?x=1` reads as **user/id** `12345 ?x=1`, so calls to the same endpoint are easy
+  to spot. Numbers, UUIDs, long hex strings, dates and long tokens count as IDs; an ID in the
+  middle shows as `orders/{id}/items`. When an OpenAPI spec is set up for the API client, its
+  path templates are used instead (which also catches IDs that look like words, such as a user
+  name), and the tooltip names the operation. Search `route:user/id` for every request with that
+  route, or `route:/user/id/{id}` for one exact template; **Only this route** in the detail panel
+  does the latter.
 - The session menu switches between the live session and saved ones.
 - Shortcuts: `/` search, `M` marker, `J`/`K` or arrows to move, `E` errors only, `F` follow,
   `O` newest/oldest first, `R` reset filters, `Ctrl+F` find in the selected event, `V` JSON

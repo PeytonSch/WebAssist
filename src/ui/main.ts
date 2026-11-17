@@ -1,4 +1,5 @@
 import { correlate, type CorrItem, type Correlation } from '../shared/correlate';
+import { RouteMatcher, serverPath, type Route, type RouteTemplate } from '../shared/route';
 import type { HubEvent, HubStatus, Level, ServerMessage, SessionInfo } from '../shared/types';
 import { apiOpen, closeApi, editEventInApi, initApi, openApi, replayEvent, saveEventToCatalog, setJsonViewerOpener } from './api';
 import { CHROME_LAUNCH_EVENT, chromeButton, chromeLaunching, chromeLaunchNote, startChrome } from './chrome';
@@ -25,6 +26,8 @@ interface Row {
   /** The response, folded into its request's row. */
   res?: HubEvent;
   hay?: string;
+  /** Network rows: the short name of the path, worked out on first use. */
+  route?: Route;
 }
 
 interface Filters {
@@ -95,6 +98,8 @@ const clock = (iso: string) => iso.slice(11, 23);
 // ── State ───────────────────────────────────────────────
 
 const state = {
+  /** Names request paths; holds the path templates of the loaded OpenAPI specs. */
+  routes: new RouteMatcher(),
   mode: 'live' as 'live' | 'replay',
   connected: false,
   session: '',
@@ -146,13 +151,23 @@ const webappOf = (r: Row): string | null => (r.ev.source === 'tomcat' ? r.ev.dat
 const isSender = (source: string) => source === 'browser' || source === 'client';
 const isStatic = (r: Row) => r.ev.source === 'browser' && groupOf(r) === 'network' && STATIC_TYPES.has(typeOf(r));
 
+/** The short name of a network row's path ("user/id" for /user/id/12345), or null. */
+function routeOf(r: Row): Route | null {
+  if (groupOf(r) !== 'network') return null;
+  const d = r.ev.data;
+  const url: string | undefined = isSender(r.ev.source) ? d.url : d.path;
+  if (!url) return null;
+  r.route ??= state.routes.route(url, d.method);
+  return r.route;
+}
+
 function hay(r: Row): string {
   if (r.hay === undefined) {
     const d = r.ev.data;
     const rd = r.res?.data ?? {};
     r.hay = [
       r.ev.summary, r.res?.summary, ridOf(r), d.url, d.message, d.text, d.body, rd.body,
-      r.ev.source, r.ev.kind, statusOf(r), rd.errorText, d.webapp,
+      r.ev.source, r.ev.kind, statusOf(r), rd.errorText, d.webapp, routeOf(r)?.label,
     ].filter((x) => x != null && x !== '').join('\n').toLowerCase();
   }
   return r.hay;
@@ -250,7 +265,15 @@ function passes(r: Row, off: Set<string>, terms: string[]): boolean {
   }
   if (terms.length) {
     const text = hay(r);
-    for (const term of terms) if (!text.includes(term)) return false;
+    for (const term of terms) {
+      if (term.startsWith('route:')) {
+        // route:user/id matches the short name; route:/user/id/{id} the exact template.
+        const want = term.slice(6);
+        const route = routeOf(r);
+        const have = want.startsWith('/') ? route?.template : route?.label;
+        if (have?.toLowerCase() !== want) return false;
+      } else if (!text.includes(term)) return false;
+    }
   }
   return true;
 }
@@ -337,7 +360,7 @@ function mainCell(r: Row): Child[] {
       h('span', { class: 'kind' }, r.ev.source === 'client' ? 'api' : r.ev.source === 'browser' ? (typeOf(r) || 'net').toLowerCase() : 'access'),
       webappTag(r),
       h('span', { class: 'method' }, d.method ?? ''),
-      h('span', { class: 'text' }, text),
+      routeText(r, text),
       ridOf(r) &&
         h('span', { class: 'linked', title: `Request ID ${ridOf(r)}` }, linkIcon()),
     ];
@@ -355,6 +378,34 @@ function mainCell(r: Row): Child[] {
 function webappTag(r: Row): HTMLElement | null {
   const app = webappOf(r);
   return app ? h('span', { class: 'webapp', title: `Webapp: ${app}` }, app) : null;
+}
+
+/**
+ * A request's path as its route in bold, then what varies muted: "user/id 12345 ?page=2". The
+ * full path stays in the tooltip. Other hosts keep their host in front, muted.
+ */
+function routeText(r: Row, text: string): HTMLElement {
+  const route = routeOf(r);
+  if (!route) return h('span', { class: 'text' }, text);
+  const host = /^[a-z][a-z0-9+.-]*:\/\/[^/?#]+/i.exec(text)?.[0];
+  const varying = [...route.params, route.query].filter(Boolean).join(' ');
+  return h('span', { class: 'text', title: [text, route.title].filter(Boolean).join('\n') },
+    host ? h('span', { class: 'route-rest' }, `${host.replace(/^[a-z]+:\/\//i, '')} `) : null,
+    h('span', { class: 'route' }, route.label),
+    varying ? h('span', { class: 'route-rest' }, ` ${varying}`) : null);
+}
+
+/** The Route line in the detail panel, with a button that shows only that route. */
+function routeFact(row: Row): HTMLElement | null {
+  const route = routeOf(row);
+  if (!route) return null;
+  // By template, so /api/orders and /api/orders/{id} (both "api/orders") stay apart.
+  const only = h('button', { class: 'btn btn-sm', type: 'button', title: `Show only ${route.template} requests (search route:${route.template})` }, 'Only this route');
+  only.onclick = () => setFilters({ q: `route:${route.template}` });
+  return h('span', { class: 'route-fact' },
+    h('code', {}, route.template),
+    route.title ? h('span', { class: 'route-rest' }, route.title) : null,
+    only);
 }
 
 function linkIcon(): Node {
@@ -927,7 +978,7 @@ function renderDetail(): void {
   if (g === 'network' && isSender(row.ev.source)) {
     const status = failedOf(row) ? rd.errorText : statusOf(row) != null ? `${statusOf(row)} ${rd.statusText ?? ''}` : 'Pending';
     add(section('Request', facts([
-      ['URL', d.url], ['Method', d.method], ['Status', status], ['Type', typeOf(row)],
+      ['URL', d.url], ['Route', routeFact(row)], ['Method', d.method], ['Status', status], ['Type', typeOf(row)],
       ['Duration', fmtDuration(durationOf(row))], ['Transferred', fmtBytes(rd.encodedBytes)],
       ['Content type', rd.mimeType], ['Request ID', ridOf(row)], ['Page', d.pageUrl],
       ['Sent by', row.ev.source === 'client' ? `API client${d.label ? ` · ${d.label}` : ''}` : null],
@@ -935,7 +986,7 @@ function renderDetail(): void {
     if (row.ev.kind === 'request') add(replayActions(row.ev.data));
   } else if (g === 'network') {
     add(section('Access log', facts([
-      ['Webapp', d.webapp], ['Path', d.path], ['Method', d.method], ['Status', d.status], ['Duration', fmtDuration(d.durationMs)],
+      ['Webapp', d.webapp], ['Path', d.path], ['Route', routeFact(row)], ['Method', d.method], ['Status', d.status], ['Duration', fmtDuration(d.durationMs)],
       ['Bytes', fmtBytes(d.bytes)], ['Remote', d.remote], ['Request ID', ridOf(row)], ['File', d.file],
     ])));
   } else if (g === 'console') {
@@ -1259,6 +1310,43 @@ function applyTheme(theme: string): void {
   document.documentElement.dataset.theme = theme;
 }
 
+/**
+ * Loads the path templates of the OpenAPI specs set up for the API client, so routes come from
+ * the spec where one covers the path. Specs that cannot be loaded are left out; routes then
+ * come from the shape of the path alone.
+ */
+async function loadRouteTemplates(): Promise<void> {
+  const templates: RouteTemplate[] = [];
+  try {
+    const info: { specs: { name: string }[]; baseUrl: string } = await (await fetch('/api/client')).json();
+    for (const { name } of info.specs ?? []) {
+      try {
+        const res = await fetch(`/api/client/specs/${encodeURIComponent(name)}`);
+        if (!res.ok) continue;
+        const spec: { name: string; servers: { url: string }[]; operations: { method: string; path: string; summary: string; operationId: string | null }[] } = await res.json();
+        // Operation paths are relative to the server: /api + /orders/{id}.
+        const prefixes = [...new Set(info.baseUrl ? [serverPath(info.baseUrl)] : spec.servers.length ? spec.servers.map((s) => serverPath(s.url)) : [''])];
+        for (const op of spec.operations) {
+          const title = `${op.summary || op.operationId || `${op.method} ${op.path}`} · ${spec.name}`;
+          for (const prefix of prefixes) templates.push({ path: prefix + op.path, method: op.method.toUpperCase(), title });
+        }
+      } catch {
+        /* this spec stays out */
+      }
+    }
+  } catch {
+    return;
+  }
+  if (!templates.length && !state.routes.size) return;
+  state.routes = new RouteMatcher(templates);
+  for (const r of state.rows) {
+    r.route = undefined;
+    r.hay = undefined;
+  }
+  scheduleRefilter();
+  if (state.selected) renderDetail();
+}
+
 function init(): void {
   initTitlebar();
   applyTheme(load<string | null>('dh.theme', null) ?? (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'));
@@ -1328,7 +1416,7 @@ function init(): void {
         closeTomcat();
         closeJsonViewer();
         closeApi();
-      }
+      } else void loadRouteTemplates();
       renderList();
     },
   });
@@ -1347,6 +1435,7 @@ function init(): void {
   initApi({
     onToggle: (open) => {
       if (open) closeJsonViewer();
+      else void loadRouteTemplates();
       renderList();
     },
     showEvent: (id) => selectEvent(id),
@@ -1391,6 +1480,7 @@ function init(): void {
   });
 
   connect();
+  void loadRouteTemplates();
 }
 
 init();
