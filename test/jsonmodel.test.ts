@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
-  canTable, cellOf, compareNodes, findJsonIn, findTable, jsonPath, jsPath, lossyNumber, parseJson, preview, QueryError, runQuery,
-  search, stringify, stringifyCapped, tableOf, toPlain, walk, type JNode,
+  canTable, cellAt, cellOf, compareNodes, inlinePreview, isRecordTable, keyValueTable, findJsonIn, findTable, jsonPath, jsPath, lossyNumber, parseJson, preview, QueryError, runQuery,
+  search, stringify, stringifyCapped, tableOf, toPlain, walk, type JNode, type JObj,
 } from '../src/ui/jsonmodel';
 
 const SAMPLES = [
@@ -245,10 +245,31 @@ describe('tables', () => {
     const t = tableOf(parseJson('{"u1":{"name":"a"},"u2":{"name":"b","age":3}}').root!)!;
     expect(t.rows.map((r) => r.seg)).toEqual(['u1', 'u2']);
     expect(t.columns).toEqual(['name', 'age']);
-    expect(tableOf(parseJson('[1,2,3]').root!)).toBeNull();
     expect(tableOf(parseJson('{"a":1}').root!)).toBeNull();
+    expect(tableOf(parseJson('[]').root!)).toBeNull();
     // An envelope of unrelated objects is not a table.
     expect(tableOf(parseJson('{"meta":{"count":1,"page":2},"data":{"items":[]}}').root!)).toBeNull();
+  });
+
+  it('tabulates arrays of plain values and of arrays too', () => {
+    const values = tableOf(parseJson('["a","b",3]').root!)!;
+    expect(values).toMatchObject({ columns: [], indexColumns: 0, valueColumn: true });
+    expect(values.rows).toHaveLength(3);
+
+    const tuples = tableOf(parseJson('[["2026-11-01", 3], ["2026-11-02", 5, "late"]]').root!)!;
+    expect(tuples).toMatchObject({ columns: [], indexColumns: 3, valueColumn: false });
+    expect(cellAt(tuples.rows[1].node, 2)).toMatchObject({ t: 'str', v: 'late' });
+    expect(cellAt(tuples.rows[0].node, 2)).toBeUndefined();
+
+    // Arrays wider than the column cap still show whole, in the value column.
+    const wide = tableOf(parseJson(JSON.stringify([Array.from({ length: 30 }, (_, i) => i)])).root!, 10)!;
+    expect(wide).toMatchObject({ indexColumns: 10, valueColumn: true, hiddenColumns: 20 });
+
+    expect(tableOf(parseJson('[{}, {}]').root!)).toMatchObject({ columns: [], valueColumn: true });
+    expect(keyValueTable(parseJson('{"id":7,"address":{"city":"London"}}').root as JObj).rows.map((r) => r.seg)).toEqual(['id', 'address']);
+    expect(canTable(parseJson('[1]').root!)).toBe(true);
+    expect(isRecordTable(parseJson('[1]').root!)).toBe(false);
+    expect(isRecordTable(parseJson('[{"a":1}]').root!)).toBe(true);
   });
 
   it('caps the columns', () => {
@@ -281,6 +302,20 @@ describe('helpers', () => {
     expect(stringifyCapped(small, 2, 1000)).toEqual({ text: stringify(small), cut: false });
     expect(canTable(root)).toBe(false);
     expect(canTable((root as { vals: JNode[] }).vals[0])).toBe(true);
+  });
+
+  it('previews nested values in table cells, looking inside them', () => {
+    const order = parseJson('{"address":{"city":"London","postCode":"NW1"},"items":[{"sku":"S-1","price":9.99},{"sku":"T-1","price":19.5}],"tags":["a","b"],"empty":{}}').root as { vals: JNode[] };
+    expect(inlinePreview(order.vals[0])).toBe('{city: "London", postCode: "NW1"}');
+    expect(inlinePreview(order.vals[1])).toBe('(2) [{sku: "S-1", price: 9.99}, {sku: "T-1", price: 19.5}]');
+    expect(inlinePreview(order.vals[2])).toBe('(2) ["a", "b"]');
+    expect(inlinePreview(order.vals[3])).toBe('{}');
+    const long = inlinePreview(order.vals[1], 30);
+    expect(long.length).toBeLessThanOrEqual(30 + '(2) '.length);
+    expect(long).toMatch(/^\(2\) \[\{sku: "S-1", .*…$/);
+    // Deep nesting is summarised rather than followed forever.
+    const deep = parseJson('{"a":{"b":{"c":{"d":{"e":1,"f":2}}}}}').root!;
+    expect(inlinePreview(deep)).toBe('{a: {b: {c: {d: {2 keys}}}}}');
   });
 
   it('previews values on one line', () => {

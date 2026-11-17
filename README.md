@@ -212,8 +212,13 @@ selected). It opens full-window over the timeline; `Esc` or **Back** returns to 
   `Tab` or `Enter` take one, `Esc` closes the list. A path that finds nothing from the top is
   looked for at any depth instead (`address.city` finds `data.customer.address.city`), and the
   status says so.
-- **Table** shows an array of objects (by default the first one in the body, or the selected
-  one) with a column per key; click a header to sort, a `{…}` or `[…]` cell to open it.
+- **Table** shows any array (by default the Path result, the selected one, or the first array
+  of objects in the body): objects get a column per key, arrays a column per position (`[0]`,
+  `[1]`…), plain values a value column. A Path with several arrays, like `orders[*].items`,
+  puts all their items in one table, each labelled with its path; an object with no array in it
+  shows its keys and values. Nested objects and arrays show what is in them on one line, e.g.
+  `{city: "York", postCode: "LS0"}` or `(2) [{sku: "S-0", price: 9.99}, …]`; hover for the whole
+  value, click to open it. Click a header to sort.
 - **Raw** is the pretty-printed text. Copy all and Download save the JSON.
 
 Numbers are shown exactly as sent, so 64-bit IDs are not rounded (they are marked "big").
