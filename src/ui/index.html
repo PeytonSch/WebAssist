@@ -39,6 +39,10 @@
       <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"><path d="M13.5 9.5A6 6 0 0 1 6.5 2.5a5.5 5.5 0 1 0 7 7Z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg>
     </button>
     <button id="btn-help" class="btn btn-icon" title="Keyboard shortcuts (?)" aria-label="Keyboard shortcuts">?</button>
+    <button id="btn-metrics" class="btn" title="Metrics: how often each endpoint is hit, how fast, how often it fails (S)" aria-label="Metrics">
+      <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M2.5 13.5h11M4.5 11V8M8 11V3.5M11.5 11V6" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+      <span class="btn-label">Metrics</span>
+    </button>
     <button id="btn-api" class="btn" title="API: send requests to your REST endpoints, from an OpenAPI spec or by hand" aria-label="API">
       <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M5.5 2.5c-1.5 0-2 .7-2 2v1.3c0 .9-.5 1.6-1.5 1.7v1c1 .1 1.5.8 1.5 1.7v1.3c0 1.3.5 2 2 2M10.5 2.5c1.5 0 2 .7 2 2v1.3c0 .9.5 1.6 1.5 1.7v1c-1 .1-1.5.8-1.5 1.7v1.3c0 1.3-.5 2-2 2" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
       <span class="btn-label">API</span>
@@ -102,6 +106,7 @@
   <div id="tomcat" class="tomcat" hidden></div>
   <div id="json" class="jsonv" hidden></div>
   <div id="api" class="apiscreen" hidden></div>
+  <div id="metrics" class="metrics" hidden></div>
 
   <dialog id="prompt" class="dialog">
     <form method="dialog" id="prompt-form">
@@ -126,6 +131,7 @@
       <dt><kbd>R</kbd></dt><dd>Reset filters</dd>
       <dt><kbd>V</kbd></dt><dd>Open the event's JSON in the JSON viewer</dd>
       <dt><kbd>G</kbd></dt><dd>Go to source: open the log entry's code in your editor</dd>
+      <dt><kbd>S</kbd></dt><dd>Metrics: endpoints, latency, errors (S or Esc to close)</dd>
       <dt><kbd>Ctrl</kbd> <kbd>F</kbd></dt><dd>Find in this event (⌘F on a Mac)</dd>
       <dt><kbd>Enter</kbd> or <kbd>F3</kbd></dt><dd>Next match (Shift: previous)</dd>
       <dt><kbd>Esc</kbd></dt><dd>Clear find, or close the panel</dd>

@@ -39,6 +39,11 @@ and replay or edit any request the browser made.
 
 ![The API screen in the dark theme: the spec's operations, a GET request and its JSON response](docs/images/api-client.png)
 
+**Metrics.** How often each endpoint is hit, how fast it answers (p50, p95, max) and how often it
+fails, over the whole session or the last few minutes, with the exceptions, log errors, Postgres
+errors, console errors and slow queries grouped beside them. Click a row to see those requests or
+that error on the timeline.
+
 **Tomcat control.** Start your whole dev setup with one button (database, dev server, then
 Tomcat, with your scripts or Tomcat's own `startup`), start, stop, disable and delete
 webapps, and get a notice when a WAR finishes building, with a one-click deploy that keeps your
@@ -151,7 +156,37 @@ opens the menu, and the top bar drags the window (double-click to maximize).
 - The session menu switches between the live session and saved ones.
 - Shortcuts: `/` search, `M` marker, `J`/`K` or arrows to move, `E` errors only, `F` follow,
   `O` newest/oldest first, `R` reset filters, `Ctrl+F` find in the selected event, `V` JSON
-  viewer, `G` go to source, `Esc` close, `?` help.
+  viewer, `G` go to source, `S` metrics, `Esc` close, `?` help.
+
+## Metrics
+
+**Metrics** in the top bar (or `S`) opens a summary of the session on the timeline, live or
+saved. It updates as events arrive.
+
+- **Which requests count.** The same request is usually recorded twice, by the browser and in
+  Tomcat's access log. *Server* counts the access log (every client, timed by Tomcat); *Browser +
+  API* counts what Chrome and the API screen sent (timed as they saw it, including the network).
+  Server is the default once there are access-log requests; nothing is counted twice. *Include
+  assets* adds scripts, styles, images and fonts (failed ones always count).
+- **Time range:** the whole session or the last 5, 15 or 60 minutes. Drag across the requests
+  chart to zoom into a window; `Esc` or the ✕ on its chip goes back.
+- **Tiles:** requests, requests per minute, error rate (4xx, 5xx and failed, out of answered
+  requests), p50 and p95 latency, slow requests (1 s or more), Tomcat log errors, exceptions,
+  slow queries and console errors.
+- **Charts:** requests over time by outcome, and p50 / p95 latency with the slowest request of an
+  interval marked where it stands above p95. Hover or focus a chart (then `←` `→`) for the
+  numbers; **Table** shows them as a table.
+- **Endpoints:** one row per method and route (the same routes as the timeline, using your
+  OpenAPI templates when a spec is set up) with count, errors, error rate, p50 / p95 / max,
+  average size, last seen and a trend. Sort by any column, filter by name, and click a row to
+  show its requests on the timeline (`route:` search).
+- **Breakdowns:** status codes, requests per webapp, and *server vs browser time*: for requests
+  both sides saw (matched by request ID), how much of the browser's time was the server's and
+  how much was network, proxy and browser.
+- **Errors:** exceptions by class, message and root cause; Tomcat warnings and errors by logger;
+  Postgres errors and console errors by message. **Slow queries** groups the statements Postgres
+  logged with a duration, with literals and the request-ID comment taken out, by total time.
+  Click any row to select its latest occurrence on the timeline.
 
 ## Go to source
 

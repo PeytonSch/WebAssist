@@ -8,28 +8,15 @@ import { createFinder } from './find';
 import { bodyLang, highlight, paint, type Lang, type Token } from './highlight';
 import { findJsonIn } from './jsonmodel';
 import { closeJsonViewer, initJsonViewer, jsonViewerOpen, openJsonViewer, type JsonSource } from './jsonviewer';
+import { closeMetrics, initMetrics, metricsChanged, metricsOpen, openMetrics } from './metrics';
 import { initSettings, openSettings, settingsOpen, updateSettingsStatus } from './settings';
 import { firstOwnRef, initSource, linkSources, openSource, setSourceContext, showError } from './source';
+import { durationOf, failedOf, groupOf, isSender, isStatic, levelOf, RANK, resOf, ridOf, routeWith, statusOf, typeOf, webappOf, type Group, type Row } from './rows';
 import { initTitlebar } from './titlebar';
 import { closeTomcat, initTomcat, onWarNotice, openTomcat, syncWarNotices, tomcatOpen } from './tomcat';
 
 // Everything captured is untrusted text. It is only ever placed in the DOM through
 // textContent (see `h`), never as HTML.
-
-type Group = 'console' | 'network' | 'log' | 'query' | 'marker';
-
-interface Row {
-  key: string;
-  t: number;
-  tEnd?: number;
-  /** The event that created the row; for network rows this is the request. */
-  ev: HubEvent;
-  /** The response, folded into its request's row. */
-  res?: HubEvent;
-  hay?: string;
-  /** Network rows: the short name of the path, worked out on first use. */
-  route?: Route;
-}
 
 interface Filters {
   q: string;
@@ -46,8 +33,6 @@ interface Preset extends Filters {
 }
 
 const ROW_H = 30;
-const RANK: Record<Level, number> = { debug: 0, info: 1, warn: 2, error: 3 };
-const STATIC_TYPES = new Set(['Script', 'Stylesheet', 'Image', 'Font', 'Media', 'Manifest', 'Ping', 'Other']);
 const SOURCES = [
   ['browser', 'Browser'],
   ['tomcat', 'Tomcat'],
@@ -125,42 +110,8 @@ const state = {
 
 // ── Row model ───────────────────────────────────────────
 
-const resOf = (r: Row): HubEvent | undefined => r.res ?? (r.ev.kind === 'response' ? r.ev : undefined);
-
-function groupOf(r: Row): Group {
-  switch (r.ev.kind) {
-    case 'marker': return 'marker';
-    case 'console': return 'console';
-    case 'request':
-    case 'response': return 'network';
-    case 'query':
-    case 'stats': return 'query';
-    default: return 'log';
-  }
-}
-function levelOf(r: Row): Level {
-  return r.res && RANK[r.res.level] > RANK[r.ev.level] ? r.res.level : r.ev.level;
-}
-const ridOf = (r: Row): string | null => r.res?.requestId ?? r.ev.requestId;
-const statusOf = (r: Row): number | null => resOf(r)?.data.status ?? r.ev.data.status ?? null;
-const durationOf = (r: Row): number | null => resOf(r)?.data.durationMs ?? r.ev.data.durationMs ?? null;
-const failedOf = (r: Row): boolean => !!resOf(r)?.data.failed;
-const typeOf = (r: Row): string => resOf(r)?.data.resourceType ?? r.ev.data.resourceType ?? '';
-/** The webapp a Tomcat event came from: '' when not known, null for other sources. */
-const webappOf = (r: Row): string | null => (r.ev.source === 'tomcat' ? r.ev.data.webapp ?? '' : null);
-/** Requests made from the browser or from the API screen: both have a request and a response event. */
-const isSender = (source: string) => source === 'browser' || source === 'client';
-const isStatic = (r: Row) => r.ev.source === 'browser' && groupOf(r) === 'network' && STATIC_TYPES.has(typeOf(r));
-
 /** The short name of a network row's path ("user/id" for /user/id/12345), or null. */
-function routeOf(r: Row): Route | null {
-  if (groupOf(r) !== 'network') return null;
-  const d = r.ev.data;
-  const url: string | undefined = isSender(r.ev.source) ? d.url : d.path;
-  if (!url) return null;
-  r.route ??= state.routes.route(url, d.method);
-  return r.route;
-}
+const routeOf = (r: Row): Route | null => routeWith(r, state.routes);
 
 function hay(r: Row): string {
   if (r.hay === undefined) {
@@ -234,6 +185,7 @@ function ingest(events: HubEvent[], bulk = false): void {
   }
   if (bulk) state.rows.sort((a, b) => a.t - b.t);
   scheduleRefilter();
+  metricsChanged();
   if (state.selected) {
     if (touchedSelected) renderDetail();
     else refreshRelated();
@@ -250,6 +202,7 @@ function resetRows(): void {
   state.selected = null;
   state.relatedKeys.clear();
   renderDetail();
+  metricsChanged();
 }
 
 // ── Filtering ───────────────────────────────────────────
@@ -1138,6 +1091,33 @@ export function selectEvent(id: string, tries = 30): void {
   select(row, true);
 }
 
+/**
+ * From the metrics screen: the timeline showing only one route's requests. Level filters and a
+ * hidden Network group would hide some of them, so those are cleared.
+ */
+function showRoute(template: string, asset: boolean): void {
+  setFilters({
+    q: `route:${template}`,
+    off: state.filters.off.filter((f) => f !== 'group:network' && !f.startsWith('level:')),
+    hideStatic: asset ? false : state.filters.hideStatic,
+  });
+  setFollow(false);
+}
+
+/** From the metrics screen: selects an event, first lifting any filter that hides it. */
+function revealEvent(key: string): void {
+  const row = state.byKey.get(key);
+  if (!row) return;
+  const app = webappOf(row);
+  const hiding = new Set([`source:${row.ev.source}`, `level:${levelOf(row)}`, `group:${groupOf(row)}`, ...(app !== null ? [`webapp:${app}`] : [])]);
+  const off = state.filters.off.filter((f) => !hiding.has(f));
+  const terms = state.filters.q.toLowerCase().split(/\s+/).filter(Boolean);
+  const q = passes(row, new Set(off), terms) ? state.filters.q : '';
+  setFilters({ off, q, hideStatic: isStatic(row) ? false : state.filters.hideStatic });
+  refilter();
+  select(row, true);
+}
+
 // ── Top bar ─────────────────────────────────────────────
 
 function renderStatus(): void {
@@ -1389,6 +1369,7 @@ async function loadRouteTemplates(): Promise<void> {
     r.hay = undefined;
   }
   scheduleRefilter();
+  metricsChanged();
   if (state.selected) renderDetail();
 }
 
@@ -1461,6 +1442,7 @@ function init(): void {
         closeTomcat();
         closeJsonViewer();
         closeApi();
+        closeMetrics();
       } else void loadRouteTemplates();
       renderList();
     },
@@ -1471,17 +1453,25 @@ function init(): void {
       if (open) {
         closeApi();
         closeJsonViewer();
+        closeMetrics();
       }
       renderList();
     },
   });
-  initJsonViewer({ onToggle: () => renderList() });
+  initJsonViewer({
+    onToggle: (open) => {
+      if (open) closeMetrics();
+      renderList();
+    },
+  });
   initSource();
   $('btn-tomcat').onclick = () => openTomcat();
   initApi({
     onToggle: (open) => {
-      if (open) closeJsonViewer();
-      else void loadRouteTemplates();
+      if (open) {
+        closeJsonViewer();
+        closeMetrics();
+      } else void loadRouteTemplates();
       renderList();
     },
     showEvent: (id) => selectEvent(id),
@@ -1491,10 +1481,26 @@ function init(): void {
     openJsonViewer({ title: 'Response body', meta: [title], text, fileName: 'response.json' }),
   );
   $('btn-api').onclick = () => openApi();
+  initMetrics({
+    onToggle: (open) => {
+      if (open) {
+        closeTomcat();
+        closeApi();
+        closeJsonViewer();
+      }
+      renderList();
+    },
+    rows: () => state.rows,
+    route: routeOf,
+    live: () => state.mode === 'live',
+    showRoute,
+    showEvent: revealEvent,
+  });
+  $('btn-metrics').onclick = () => openMetrics();
 
   document.addEventListener('keydown', (e) => {
-    // The settings, Tomcat, API and JSON viewer screens have their own keys.
-    if (settingsOpen() || tomcatOpen() || apiOpen() || jsonViewerOpen()) return;
+    // The settings, Tomcat, API, JSON viewer and metrics screens have their own keys.
+    if (settingsOpen() || tomcatOpen() || apiOpen() || jsonViewerOpen() || metricsOpen()) return;
     if (finder.handleKey(e)) return;
     const target = e.target as HTMLElement;
     const typing = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT';
@@ -1522,6 +1528,7 @@ function init(): void {
       case 'r': case 'R': setFilters({ ...DEFAULT_FILTERS }); break;
       case 'v': case 'V': viewJson(jsonForSelected()); break;
       case 'g': case 'G': void goToSource(); break;
+      case 's': case 'S': e.preventDefault(); openMetrics(); break;
       case '?': help.showModal(); break;
     }
   });
