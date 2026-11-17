@@ -8,13 +8,17 @@
 //
 // Steps: fetch origin/main (with the user's fetch command if there is one, else git fetch, then
 // once more through the system proxy if that cannot connect), fast-forward to origin/main, run
-// npm install when package.json or package-lock.json changed, then npm run app. A fetch that
+// npm install when package.json or package-lock.json changed, then what npm run app does (the
+// build, then Electron), run directly so no console window opens. A fetch that
 // fails is not the end: commits fetched earlier (by the app's check, the terminal or the IDE) are
 // still merged. If the merge or install fails, the version that was there is started again, and
-// the result file says what went wrong so the app can tell the user. Output goes to the log file
-// the app opened for it (git-update.log in the app's data folder).
+// the result file says what went wrong so the app can tell the user; a new version that does not
+// build is undone the same way. Output goes to the log file the app opened for it (git-update.log
+// in the app's data folder).
 import { spawn, spawnSync } from 'node:child_process';
 import { writeFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
+import { join } from 'node:path';
 
 const args = process.argv.slice(2);
 const opt = (name, fallback = null) => {
@@ -129,6 +133,67 @@ try {
   log(`update failed: ${err.message}`);
 }
 
+/** What `npm run app` runs (package.json "app"); test/gitupdate.test.ts checks they agree. */
+const APP_SCRIPT = 'node scripts/build.mjs && electron .';
+
+/** Builds dist/ as npm run app would; the reason it failed, or null. */
+function build() {
+  try {
+    run(process.execPath, ['scripts/build.mjs'], { timeout: 300_000 });
+    return null;
+  } catch (err) {
+    return err.message;
+  }
+}
+
+/**
+ * Starts the app the way `npm run app` does, without npm. On Windows npm is npm.cmd, which only
+ * runs through cmd.exe, and this script has no console (the app started it detached), so cmd's
+ * node would open a new console window that stays for as long as the app runs. Electron itself is
+ * a windowed program and opens none; the build runs hidden like every other step here.
+ */
+function startApp() {
+  let electron = null;
+  try {
+    // The electron package's main export is the path of its binary.
+    electron = createRequire(join(repo, 'package.json'))('electron');
+  } catch (err) {
+    log(`electron not found (${err.message}); starting npm run app instead`);
+  }
+  if (typeof electron === 'string') {
+    log(`$ ${electron} .`);
+    const child = spawn(electron, ['.'], { cwd: repo, detached: true, stdio: 'ignore', windowsHide: true });
+    child.on('error', (err) => log(`could not start Electron: ${err.message}`));
+    child.unref();
+    return;
+  }
+  // Started detached, so it outlives this script.
+  log('$ npm run app');
+  const child = spawn(win ? 'npm.cmd' : 'npm', ['run', 'app'], { cwd: repo, detached: true, stdio: 'ignore', shell: win, windowsHide: true });
+  child.on('error', (err) => log(`could not start npm run app: ${err.message}`));
+  child.unref();
+}
+
+if (restart) {
+  const buildError = build();
+  if (buildError && result.ok && result.from && result.to !== result.from) {
+    // Something must start: go back to the version that ran, which built before.
+    log(`the new version did not build (${buildError}); going back to ${result.from.slice(0, 7)}`);
+    try {
+      run('git', ['reset', '--keep', result.from]);
+      result.to = result.from;
+      result.ok = false;
+      result.error = `The new version did not build: ${buildError}`;
+      const again = build();
+      if (again) log(`the old version did not build either: ${again}`);
+    } catch (err) {
+      log(`could not go back: ${err.message}`);
+    }
+  } else if (buildError) {
+    log(`build failed: ${buildError}`);
+  }
+}
+
 result.at = new Date().toISOString();
 if (resultFile) {
   try {
@@ -138,16 +203,4 @@ if (resultFile) {
   }
 }
 
-if (restart) {
-  // Started detached, so it outlives this script. npm run app builds, then opens the app.
-  log('$ npm run app');
-  const child = spawn(win ? 'npm.cmd' : 'npm', ['run', 'app'], {
-    cwd: repo,
-    detached: true,
-    stdio: 'ignore',
-    shell: win,
-    windowsHide: true,
-  });
-  child.on('error', (err) => log(`could not start npm run app: ${err.message}`));
-  child.unref();
-}
+if (restart) startApp();

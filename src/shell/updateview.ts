@@ -335,7 +335,7 @@ function renderAvailable(v: Extract<UpdateView, { mode: 'available' }>): void {
   footer.replaceChildren(
     h('div', { class: 'note' }, v.blocked
       ? 'Debug Hub keeps running as it is.'
-      : h('span', {}, 'Debug Hub quits, fast-forwards to ', h('code', {}, v.source), d?.dependencies ? ', runs npm install' : '', ' and starts again with ', h('code', {}, 'npm run app'), '.')),
+      : h('span', {}, 'Debug Hub quits, fast-forwards to ', h('code', {}, v.source), d?.dependencies ? ', runs npm install' : '', ' and starts again, as ', h('code', {}, 'npm run app'), ' would.')),
     ...actionButtons(v.actions),
   );
   (footer.querySelector('.btn-primary') as HTMLButtonElement | null)?.focus();

@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -256,6 +256,60 @@ describe('scripts/update-and-restart.mjs', () => {
     const { result } = runHelper('--fetch-command', JSON.stringify(command));
     expect(result).toMatchObject({ ok: true, fetchError: null, to: git(other, 'rev-parse', 'HEAD') });
     expect(readFileSync(marker, 'utf8')).toBe('x');
+  });
+
+  it('mirrors package.json\'s app script, which it runs without npm', () => {
+    const pkg = JSON.parse(readFileSync('package.json', 'utf8'));
+    expect(readFileSync(HELPER, 'utf8')).toContain(`const APP_SCRIPT = '${pkg.scripts.app}';`);
+  });
+
+  describe('restarting', () => {
+    const BUILD_OK = "import { appendFileSync } from 'node:fs'; appendFileSync('built.txt', 'x');";
+    let started: string;
+    beforeEach(() => {
+      // A stand-in for the build and for Electron: the helper runs node scripts/build.mjs, then
+      // the binary the electron package names, with no npm (and so no console window) between.
+      started = join(dir, 'started.txt');
+      const fake = join(dir, 'fake-electron.sh');
+      writeFileSync(fake, `#!/bin/sh\necho "$PWD $*" > ${JSON.stringify(started)}\n`, { mode: 0o755 });
+      mkdirSync(join(checkout, 'node_modules', 'electron'), { recursive: true });
+      writeFileSync(join(checkout, 'node_modules', 'electron', 'index.js'), `module.exports = ${JSON.stringify(fake)};`);
+      writeFileSync(join(other, '.gitignore'), 'node_modules\nbuilt.txt\n');
+      git(other, 'add', '.gitignore');
+      mkdirSync(join(other, 'scripts'), { recursive: true });
+      commit(other, 'scripts/build.mjs', BUILD_OK, 'Build script');
+      git(other, 'push', '-q', 'origin', 'main');
+      git(checkout, 'pull', '-q', 'origin', 'main');
+    });
+    const waitForStart = async () => {
+      for (let i = 0; i < 100 && !existsSync(started); i++) await new Promise((r) => setTimeout(r, 50));
+      return readFileSync(started, 'utf8').trim();
+    };
+    const runRestart = () => {
+      const result = join(dir, 'result.json');
+      const r = spawnSync(process.execPath, [HELPER, '--pid', '0', '--repo', checkout, '--result', result], { env: ENV, encoding: 'utf8' });
+      expect(r.status, r.stdout + r.stderr).toBe(0);
+      return { out: r.stdout, result: JSON.parse(readFileSync(result, 'utf8')) };
+    };
+
+    it.skipIf(process.platform === 'win32')('builds, then starts Electron directly', async () => {
+      publish('a.txt', '1', 'New');
+      const { out, result } = runRestart();
+      expect(result).toMatchObject({ ok: true, to: git(other, 'rev-parse', 'HEAD') });
+      expect(readFileSync(join(checkout, 'built.txt'), 'utf8')).toBe('x');
+      expect(await waitForStart()).toBe(`${resolve(checkout)} .`);
+      expect(out).not.toContain('npm run app');
+    });
+
+    it.skipIf(process.platform === 'win32')('goes back to the version that ran when the new one does not build', async () => {
+      const before = git(checkout, 'rev-parse', 'HEAD');
+      publish('scripts/build.mjs', 'process.exit(3);', 'Break the build');
+      const { result } = runRestart();
+      expect(result).toMatchObject({ ok: false, to: before, error: expect.stringMatching(/did not build/) });
+      expect(git(checkout, 'rev-parse', 'HEAD')).toBe(before);
+      expect(readFileSync(join(checkout, 'built.txt'), 'utf8')).toBe('x');
+      expect(await waitForStart()).toContain(' .');
+    });
   });
 
   it('hands its result to the next start once', () => {

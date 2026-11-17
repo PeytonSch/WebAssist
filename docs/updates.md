@@ -85,10 +85,13 @@ instead of using releases:
 - **Updating** quits the app, which stops the hub so the session file is complete, then
   `scripts/update-and-restart.mjs` (on your normal `node`) waits for it to exit, runs
   `git pull --ff-only origin main`, runs `npm install` if `package.json` or `package-lock.json`
-  changed, and starts `npm run app` again: the build, then the splash. On Windows the wait
-  matters, because a running Electron keeps its own files locked.
-- **If it fails** (a pull that cannot fast-forward, an `npm install` error), the version that was
-  there starts again and says why. The full output is in `git-update.log` in the user data
+  changed, and starts the app again the way `npm run app` does: the build, then Electron. It
+  runs those two itself rather than through npm, so no terminal window opens beside the app
+  (on Windows, npm goes through `cmd.exe`, which would open a console that stays open as long as
+  the app runs). The build's output goes to `git-update.log`. On Windows the wait matters,
+  because a running Electron keeps its own files locked.
+- **If it fails** (a pull that cannot fast-forward, an `npm install` error, a new version that
+  does not build), the version that was there starts again and says why. The full output is in `git-update.log` in the user data
   folder.
 
 It does not update a clone that is on another branch, has commits of its own that `main` does

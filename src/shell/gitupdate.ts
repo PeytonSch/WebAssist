@@ -237,7 +237,7 @@ export function describeUpdate(s: Extract<GitUpdateStatus, { state: 'available' 
   const note = s.fetchError ? `\n\n${fetchNote(s)}` : '';
   const how = s.blocked
     ? `\n\nIt cannot be updated automatically. ${s.blocked} Update by hand with git pull, then npm run app.`
-    : `\n\nUpdating quits Debug Hub, brings in these commits (git fetch, then a fast-forward merge; npm install if dependencies changed), then starts it again with npm run app.`;
+    : `\n\nUpdating quits Debug Hub, brings in these commits (git fetch, then a fast-forward merge; npm install if dependencies changed), then builds and starts it again, as npm run app would.`;
   return { message: `A Debug Hub update is available: ${n} on ${GIT_REMOTE}/${GIT_BRANCH}`, detail: `${list}${more}${how}${note}` };
 }
 
@@ -346,8 +346,8 @@ export interface UpdateResult {
 const resultFile = (userData: string) => join(userData, 'git-update-result.json');
 
 /**
- * Starts the helper that waits for this process to exit, pulls, installs if needed and runs
- * `npm run app` again. Call app.quit() right after. It runs on the system's node (the one npm
+ * Starts the helper that waits for this process to exit, pulls, installs if needed, then builds
+ * and starts Electron again as `npm run app` does, but without npm's console window. Call app.quit() right after. It runs on the system's node (the one npm
  * uses), not on this Electron, whose files `npm install` may need to replace.
  */
 export function startGitUpdate(repo: string, userData: string, fetch: FetchOptions = {}): void {
