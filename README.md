@@ -1,168 +1,126 @@
 # Debug Hub
 
-Records what happens during a local development session and shows it in one timeline:
-browser console and network activity from Chrome, Tomcat application and access logs, and
-Postgres slow queries and errors. Select a failed request and the server events it caused
-appear beside it.
+One timeline for everything that happens while you develop a Java web app locally: the
+browser's console and network traffic from Chrome, Tomcat's application and access logs, and
+Postgres slow queries and errors. Select a failed request and the log lines, stack trace and
+SQL it caused appear beside it. From there you can open the code in your editor, explore the
+JSON, replay the request, and redeploy the WAR you just built.
 
-Everything runs on your machine. The server binds to `127.0.0.1` and sends nothing anywhere.
+Everything runs on your machine. The hub binds to `127.0.0.1` and sends nothing anywhere.
 
-## Status
+![A failed request selected on the timeline, with the Tomcat log, stack trace and Postgres error it caused beside it](docs/images/timeline.png)
 
-| Phase | State |
-|---|---|
-| 0 Discovery | **Open.** Run `npm run doctor` on the development machine (see below). |
-| 1 Browser capture | Built. Passes `npm run acceptance` against a real Chromium. |
-| 2 Tomcat capture | Built. Tested with Tomcat-format fixture logs, not yet with your Tomcat. |
-| 3 Timeline UI | Built. |
-| 4 Request-ID correlation | Hub side built. The app-side changes are in `docs/correlation.md`, not applied. |
-| 5 Postgres | Log tailing built (slow queries, `auto_explain` plans, errors). The stats poller is not built. |
-| 6 Polish | Markers, shortcuts and filter presets built. |
+## What it does
 
-Deviations from the plan are listed in `docs/decisions.md`.
+**One timeline, linked by request.** Chrome (attached over the DevTools protocol, alongside
+IntelliJ's debugger), Tomcat logs and Postgres logs are recorded into one session. When a
+request carries an ID (`X-Request-Id`), the server events it caused are listed under it;
+without one, they are matched by path and time. Network rows read as routes, `api/orders 42`
+rather than `/api/orders/42`, and Tomcat rows carry the webapp they came from, with a filter
+for each.
 
-## Desktop app
+**Find and go to source.** A find bar searches everything about the selected event, bodies
+included. Stack frames, loggers and exceptions from your own code become links that open the
+file at the line in VS Code, IntelliJ IDEA, Emacs or Neovim (a running nvim is reused).
 
-Debug Hub also runs as a desktop app that updates itself: open it, a splash screen checks
-GitHub for a newer release, installs it, and the window opens on the new version. For the
-first install on a computer, download the Windows installer (or the macOS `.dmg`) from the
-releases page. Everything is set up in **Settings** (File → Settings…, or `Ctrl+,`), which opens
-by itself on the first run; the sessions folder is under the File menu too. On Windows the app
-draws its own title bar in the app's theme: the ☰ button at the top left opens the menu
-(File, Edit, View, Window), and the top bar drags the window (double-click to maximize). On
-macOS the usual window buttons stay at the top left. Releasing is `git tag vX.Y.Z && git push origin vX.Y.Z`; details in
-`docs/updates.md`.
+![The find bar highlighting matches in a stack trace, with links on the frames from your own code](docs/images/go-to-source.png)
 
-## Quick start (from source)
+**JSON viewer.** Response and request bodies open full-window as a tree, a table or
+highlighted text. The Path box completes paths from the document itself and finds nested ones
+(`price` offers `data.orders[*].items[*].price`); the table shows any array, with nested values
+summarised in each cell.
 
-Requires Node.js 18 or later.
+![The JSON viewer's table of orders, with nested tags, addresses and items shown in their cells](docs/images/json-viewer.png)
+
+**API client.** Load your OpenAPI or Swagger spec and call any endpoint: parameters and an
+example body come from the spec, requests are sent by the hub (no CORS), and each one lands on
+the timeline with the server events it caused. Save requests in a catalog with `{{variables}}`,
+and replay or edit any request the browser made.
+
+![The API screen in the dark theme: the spec's operations, a GET request and its JSON response](docs/images/api-client.png)
+
+**Tomcat control.** Start your whole dev setup with one button (database, dev server, then
+Tomcat, with your scripts or Tomcat's own `startup`), start, stop, disable and delete
+webapps, and get a notice when a WAR finishes building, with a one-click deploy that keeps your
+local `config.yaml`, `config.js` and `log4j2.xml`.
+
+![The Tomcat page after Start Tomcat ran two start commands and Tomcat's startup script, with a new-WAR notice](docs/images/tomcat.png)
+
+**Light and dark.** Every screen has both themes.
+
+![The timeline in the dark theme, with an API-client request and the Tomcat events it caused](docs/images/timeline-dark.png)
+
+## Getting started
+
+You need [Git](https://git-scm.com/), [Node.js](https://nodejs.org/) 18 or later, and Chrome.
+Then:
 
 ```
+git clone https://github.com/PeytonSch/WebAssist.git
+cd WebAssist
 npm install
+npm run app
 ```
 
-**Try it without your stack.** Two terminals:
+`npm run app` builds Debug Hub and opens it as a desktop app. The first time, it opens on
+**Settings** (later: File → Settings…, or `Ctrl+,`), where you point it at your setup. Each
+section says what it needs and shows what it finds as you type:
+
+- **Browser**: press **Start Chrome**. Chrome opens with a debugging port and a profile of its
+  own, and the timeline starts filling as you use your app in it.
+- **Tomcat**: the logs folder (usually `CATALINA_BASE/logs`). Under **Tomcat server**: the
+  `webapps` folder, the folders your WARs are built in, and optionally start and stop scripts
+  and start commands.
+- **Postgres**: the server log, for slow queries, plans and errors.
+- **API client**: your OpenAPI spec URL, e.g. `http://localhost:8080/v3/api-docs`.
+- **Source code**: your editor.
+
+Not sure where things are? `npm run doctor -- --project /path/to/your/app` inspects the running
+Chrome, Tomcat and Postgres and prints what it finds (see `docs/environment.md`).
+
+### Keeping it up to date
+
+Run this way, Debug Hub keeps itself up to date with `main`. It checks for new commits when it
+starts (on the splash screen) and every 5 minutes, lists them, and on **Update and restart**
+runs `git pull`, then `npm install` if the dependencies changed, then `npm run app` again.
+**File → Check for Updates…** checks now. It leaves the update to you when the checkout is on
+another branch or has changes of its own; then it is the usual:
 
 ```
-npm run demo                 # a stand-in app on :4010 that writes Tomcat- and Postgres-format logs
-npm run demo:hub             # the hub on http://localhost:4000
+git pull
+npm install        # when package.json changed
+npm run app
+```
+
+Details, and how to turn it off: [docs/updates.md](docs/updates.md).
+
+### Try it without your stack
+
+The repository has a stand-in app that writes Tomcat- and Postgres-format logs, serves an
+OpenAPI spec, and has buttons for a 500 error, a slow query and the like. In two terminals:
+
+```
+npm run demo        # the stand-in app on http://localhost:4010
+npm run demo:hub    # Debug Hub in the browser, on http://localhost:4000, set up for the demo
 ```
 
 Open http://localhost:4000, click **Start Chrome**, open http://localhost:4010 in the Chrome
-window that appears and click the buttons in the demo app.
+window that appears and click the buttons.
 
-**Use it with your stack.**
+### Other ways to run it
 
-1. Start the IntelliJ session (Vite, Tomcat, Chrome) as usual.
-2. `npm run doctor -- --project /path/to/your/app --out docs/environment.md` and read the result.
-3. `npm start`, open http://localhost:4000, click **Settings** and fill in the paths `doctor`
-   found.
+- **In a browser tab:** `npm start` serves the same UI on http://localhost:4000 without the
+  desktop app. It reads `debug-hub.config.json` from the folder you start it in (or
+  `--config <file>`); the desktop app keeps its settings in its user-data folder instead
+  (File → Open Config File).
+- **Installers:** a release build installs like any app (Windows installer, macOS `.dmg`) and
+  updates itself from GitHub Releases rather than from git. See
+  [docs/updates.md](docs/updates.md).
 
-## Configuration
+On Windows the desktop app draws its own title bar in its theme: the ☰ button at the top left
+opens the menu, and the top bar drags the window (double-click to maximize).
 
-The **Settings** screen edits everything below. Each log path shows which files it matches as
-you type, and saving applies the change at once without a restart (except `port`). Settings
-are stored in `debug-hub.config.json` in the directory you start the hub from (or
-`--config <file>`); in the desktop app, in its user-data folder. Keys added by hand are kept
-when Settings saves the file.
-
-Relative paths are relative to the config file. Everything is optional. Windows paths can be
-written with forward slashes or pasted as they are (`C:\Users\me\logs`).
-
-| Key | Default | Meaning |
-|---|---|---|
-| `port` | `4000` | UI port. Also `--port`. |
-| `sessionsDir` | `sessions` | Where session files are written. |
-| `chrome.port` | `9222` | Chrome's remote debugging port. Also `--cdp-port`. |
-| `chrome.profileDir` | `chrome-profile` | The `--user-data-dir` that **Start Chrome** uses. Must not be Chrome's everyday profile (see below). |
-| `chrome.executable` | empty | Chrome for **Start Chrome**. Empty: the usual install locations (Program Files and `%LOCALAPPDATA%` on Windows, `/Applications` and `~/Applications` on macOS, `google-chrome`/`chromium` on `PATH` on Linux). |
-| `chrome.captureBodies` | `true` | Capture text and JSON response bodies. |
-| `chrome.bodyResourceTypes` | `XHR, Fetch, Document` | Resource types whose bodies are captured. |
-| `tomcat.enabled` | `false` | Turn on the Tomcat collectors. |
-| `tomcat.logsDir` | (empty) | A Tomcat logs folder, usually `CATALINA_BASE/logs`. Every log in it is followed; see below. |
-| `tomcat.appLogs` | `[]` | Application logs outside the logs folder. `*` is allowed in the file name. |
-| `tomcat.accessLogs` | `[]` | Access logs outside the logs folder. |
-| `tomcat.webappsDir`, `tomcat.disabledDir` | (empty) | Webapp folders. Their contents are the webapp names used to label events. |
-| `tomcat.accessDurationUnit` | `ms` | Unit of `%D`: `ms` up to Tomcat 9, `us` from Tomcat 10. |
-| `tomcat.webappsDir` | | Tomcat's `webapps` folder, for the Tomcat page and WAR deploys. |
-| `tomcat.disabledDir` | | Where disabled webapps are moved. Must be outside `webappsDir`. |
-| `tomcat.startScript`, `tomcat.stopScript` | | Scripts run by Start Tomcat and Stop Tomcat (`.bat`, `.cmd`, `.ps1`, `.sh` or any program). Empty: Tomcat's own `bin/startup` and `bin/shutdown`. |
-| `tomcat.home` | (empty) | `CATALINA_HOME`, for Tomcat's own scripts. Empty: the folder above `webappsDir`, if it has `bin`. |
-| `tomcat.javaHome` | (empty) | `JAVA_HOME` for Tomcat's own scripts. Empty: Debug Hub's environment. |
-| `tomcat.startCommands` | `[]` | Commands run by Start Tomcat before Tomcat: `{ "name", "command", "cwd", "wait" }`. See below. |
-| `tomcat.startChrome` | `false` | Start Tomcat also starts Chrome with its debugging port, last. |
-| `tomcat.manager` | | Optional Tomcat Manager login: `{ "url": "http://localhost:8080/manager/text", "username": …, "password": … }`. The password is stored as plain text. |
-| `tomcat.warWatch` | `[]` | Folders where WARs are built; `*` matches any folder name, e.g. `C:/dev/*/target`. |
-| `tomcat.preserveFiles` | `["config.yaml", "config.js", "log4j2.xml"]` | File names (`*` allowed) a deploy can keep from the deployed copy instead of the new build's. |
-| `postgres.enabled`, `postgres.logs` | `false`, `[]` | Postgres server logs. |
-| `tail.fromStart` | `false` | Read existing log content at startup, not only new lines. |
-| `redact.headers` | `authorization, proxy-authorization, cookie, set-cookie` | Header values replaced with `[redacted]` before writing. |
-| `maxBodyBytes` | `65536` | Bodies above this are truncated; the event records the original size. |
-| `correlation.header` | `X-Request-Id` | Header that carries the request ID. |
-| `correlation.logPatterns` | `rid=…`, `requestId=…` | Regexes (one capture group) that find the ID in a log line or SQL comment. |
-| `correlation.timeWindowMs` | `2000` | Window for the timing fallback. |
-| `api.specs` | `[]` | OpenAPI/Swagger specs for the API screen: `{ "name", "url" }`, the URL an `http(s)://` or `file://` URL or a path (relative to the config file). |
-| `api.baseUrl` | (empty) | What `{{baseUrl}}` stands for, instead of the spec's servers. |
-| `api.headers` | `[]` | Default headers sent with every API request: `{ "name", "value" }`. **Stored as plain text.** |
-| `api.timeoutMs` | `30000` | How long an API request may take. |
-| `api.addRequestId` | `true` | Send `correlation.header` with a fresh ID on API requests, unless the request sets it. |
-| `api.insecureTls` | `false` | Accept self-signed and otherwise untrusted https certificates on API requests. |
-| `editor.kind` | (empty) | Go to source: `vscode`, `idea`, `emacs`, `nvim` or `custom`. Empty: off. |
-| `editor.program` | (empty) | The editor's program. Empty: found on `PATH` and in the usual install places. |
-| `editor.nvimReuse` | `true` | Neovim: open files in a running nvim instead of a new window. |
-| `editor.terminal` | `wezterm start --cwd {dir} -- {cmd}` | Neovim: the command that opens a terminal window running `{cmd}`. |
-| `editor.custom` | (empty) | Custom editor: a command with `{file}` `{line}` `{column}` `{dir}`. |
-| `editor.sourceDirs` | `[]` | Project folders to index besides those found above `tomcat.warWatch`. |
-
-## Collectors
-
-**Chrome.** Attaches to a running browser over CDP, and does not enable the Debugger domain,
-so it runs alongside IntelliJ's JavaScript debugger. Records console messages, uncaught
-exceptions, and requests with status, timing, headers and bodies. New tabs are attached as they
-open. If Chrome restarts, the hub reconnects within about a second. The hub's own UI tab is
-skipped.
-
-Chrome has to be started with a debugging port **and a profile folder of its own**: Chrome 136
-and later silently keep the port closed on the everyday profile, and a Chrome that is already
-running on the profile you start takes the new window over and drops the flags. The easiest
-way is the **Start Chrome** button (in the timeline while Chrome is not connected, on the
-Chrome status pill in the top bar, and under Settings > Browser). It starts Chrome directly,
-with `--remote-debugging-port=<chrome.port> --user-data-dir=<chrome.profileDir>`, does nothing
-if Chrome already answers on the port, and says what went wrong if the port does not open.
-Settings > Browser also shows the same command to run yourself (on Windows, for Command Prompt
-and for PowerShell) with every path written out, so it can go into a shortcut or an IntelliJ
-browser configuration.
-
-**Tomcat logs folder.** With `tomcat.logsDir` set, every file in the folder is followed:
-names containing `access_log` as access logs, everything else as application logs, and files
-that appear later (the next day's logs) as they appear. Compressed archives and lock files are
-skipped, and a file also listed under `appLogs` or `accessLogs` is left to that list. Old
-rotated files cost almost nothing: files not written for an hour are only checked every few
-seconds, and even with `tail.fromStart` files older than a day are not replayed.
-
-**Tomcat application logs.** Follows the files, including date-rotated ones and truncation.
-A line that starts with neither a timestamp nor a level is treated as a continuation, so a
-stack trace is one event. Understands the Tomcat JUL layout, JUL's two-line default layout,
-and common Logback, Log4j, Log4j2 and Spring Boot layouts, including level-first lines without
-a timestamp (`DEBUG com.example.Foo - …`) that console appenders write into `catalina.out`.
-
-**Webapp labels.** Each Tomcat log entry and access-log request is labelled with the webapp it
-came from, where that can be told: by the log file's name (`shop.2026-11-16.log` is `shop`;
-Tomcat's own `catalina`, `localhost` and `manager` logs name no webapp), by Tomcat's context
-markers in the message (`in context with path [/shop]`, `Deploying web application directory
-[…/webapps/shop]`), and for requests by their context path. Request paths are only matched
-against webapps the hub knows: the contents of `tomcat.webappsDir` and `tomcat.disabledDir`
-(or the `webapps` folder next to the logs folder), plus names seen in log file names and
-deployment messages. `ROOT` is the `/` app.
-
-**Tomcat access logs.** Parses the common pattern, and the extended pattern in
-`docs/correlation.md` that adds duration and the request ID.
-
-**Postgres.** Follows the server log. Slow statements and `auto_explain` plans become query
-events with the SQL and plan separated; `DETAIL`, `HINT` and `STATEMENT` lines are folded
-into the error above them.
-
-## Using the timeline
+## The timeline
 
 - Filter by source, level and kind; shift-click a filter to show only that one. Search matches
   URLs, messages, bodies, request IDs and webapp names.
@@ -195,7 +153,7 @@ into the error above them.
   `O` newest/oldest first, `R` reset filters, `Ctrl+F` find in the selected event, `V` JSON
   viewer, `G` go to source, `Esc` close, `?` help.
 
-### Go to source
+## Go to source
 
 Java classes in Tomcat log entries open in your editor at the line: stack frames from your own
 code, the logger (shown under Log entry) and exception classes become links (underlined on
@@ -239,7 +197,7 @@ Toolbox `idea.cmd` starts), `emacsclient.exe -n +line:column file`, `nvim.exe --
 /v:off /s /c` with every argument quoted; a file path containing `"` or `%` is refused there.
 Only files in the index are opened: the API takes a class name, never a path.
 
-### JSON viewer
+## JSON viewer
 
 JSON response and request bodies, the raw event, and console or log messages that contain a
 JSON object get a **JSON viewer** button in the detail panel (or press `V` with the event
@@ -276,10 +234,73 @@ When a body was cut off at the body size limit, the viewer shows what was captur
 and marks the values that were cut off; raise "Body size limit" in Settings to capture more.
 Text that is not valid JSON is shown as captured, with the position of the error marked.
 
+## API client
+
+The **API** button in the top bar (or `#api`) opens a screen for calling your REST endpoints
+directly, and seeing what each call did on the server.
+
+- **Specs.** Add your OpenAPI 3.0/3.1 or Swagger 2.0 spec under Settings → API client: a URL
+  (Spring's springdoc serves it at `/v3/api-docs`, springfox at `/v2/api-docs`) or a file.
+  JSON is read as is; YAML through a small built-in reader that covers what specs use (block
+  maps and lists, quoted and block text, `[ ]` and `{ }`) and names the line of anything else
+  (anchors and aliases are not supported). **Load specs** in Settings checks each one. The
+  spec's operations are listed by tag, with their parameters, request body and responses;
+  `$ref`s within the spec are followed (references to other files are not). The server URL
+  comes from the spec (`servers`, or Swagger 2's `schemes`/`host`/`basePath`; relative ones
+  are resolved against the spec's URL) unless **Base URL** is set. Default headers are sent
+  when fetching a spec only from this machine or the base URL's host.
+- **Requests.** Pick an operation, or **+ New** for a request without a spec. The builder fills
+  in path, query, header and cookie parameters with the spec's examples (optional ones start
+  switched off; typing a value switches them on; enums become a menu), shows the default
+  headers from Settings (each can be turned off for the request, or overridden), and can
+  generate an example JSON body from the schema (`readOnly` properties are left out). A JSON
+  object body is form-encoded when the content type is `application/x-www-form-urlencoded`.
+  The URL line shows the URL as it will be sent. **Send** (`Ctrl+Enter`) sends it; **Cancel**
+  stops it. The values last used for each operation are remembered in the browser.
+- **How it is sent.** The hub sends the request itself, so CORS does not apply and any local
+  service can be reached. Redirects are returned as they are unless **Follow redirects** is on.
+  With `api.addRequestId` on, the request carries `correlation.header` with a fresh ID, so the
+  Tomcat log lines and queries it causes are linked to it on the timeline. Proxy variables
+  (`HTTP_PROXY`) are not used.
+- **Response.** Status, time, size, headers and the body (pretty-printed and highlighted;
+  binary bodies are not shown; up to 10 MB). **Show in timeline** closes the screen and selects
+  the request on the timeline, with its server events.
+- **On the timeline**, API requests are their own source (**API**), recorded like browser
+  requests: a request and its response, headers redacted per `redact.headers`, bodies cut at
+  `maxBodyBytes`.
+- **Saved requests.** **Save** puts the request in a catalog, with a name, a folder and a
+  description; the **Saved** list groups them by folder, and each can be sent at once (▶),
+  renamed or moved, duplicated or deleted. A request built from the spec is saved with
+  `{{baseUrl}}`, so it still works when the base URL changes. The catalog is
+  `api-requests.json` next to the settings file, so it can be backed up or put in git;
+  **Export** downloads it and **Import** merges a file into it (by id; variables by name) and
+  says what changed. An unreadable file is renamed aside, not overwritten.
+- **Variables.** `{{name}}` in a URL, parameter, header or body is filled in from
+  **Variables** (stored in the same file); `{{baseUrl}}` is built in. A request with an
+  unknown variable is not sent; the screen says which.
+- **History.** The last 50 sends are listed under **History** and can be opened again. They
+  are kept in the browser's local storage with the request's own headers, but not the default
+  headers from Settings.
+- **Recorded requests.** A browser (or API) request on the timeline offers **Replay** (send it
+  again now, through the hub, and select the new one), **Edit and send** (open it in the
+  builder) and **Save to catalog…**. Headers that cannot or should not be sent again are left
+  out (`Host`, `Content-Length`, `Connection`, `Accept-Encoding`, `sec-ch-*`, `sec-fetch-*`,
+  HTTP/2 pseudo-headers, the old request ID). A header redacted when it was recorded is sent
+  from the default headers if one has that name, and otherwise becomes `{{header-name}}`,
+  e.g. `{{authorization}}`, to fill in under Variables; Replay says so rather than sending
+  `[redacted]`. A body cut off at `maxBodyBytes` when recorded cannot be replayed. Chrome does
+  not report cookies with the request, so a cookie-based session has to be given as a
+  `Cookie` header.
+- **JSON viewer.** **Open in JSON viewer** opens a JSON response in the full JSON viewer; `Esc`
+  comes back to the API screen.
+
+**Plain text:** default headers (`debug-hub.config.json`) and saved requests and variables
+(`api-requests.json`) are stored unencrypted. Keep real credentials out of files you share.
+
 ## Tomcat page and WAR deploys
 
 The **Tomcat** button in the top bar (or `#tomcat`) opens a page for running Tomcat from Debug
-Hub. Set it up under Settings → Tomcat → Management; the page says what is missing.
+Hub. Set it up under Settings → Tomcat server; the page says what is missing.
 
 - **Server.** Start Tomcat and Stop Tomcat run your own scripts, in the script's folder, or
   without them Tomcat's own `bin/startup.bat` and `bin/shutdown.bat` (`.sh` elsewhere), the
@@ -340,68 +361,108 @@ Hub. Set it up under Settings → Tomcat → Management; the page says what is m
   changed. ZIP64 (over 4 GB) and encrypted WARs cannot be rewritten; deploy those without
   keeping files.
 
-## API client
+## Collectors
 
-The **API** button in the top bar (or `#api`) opens a screen for calling your REST endpoints
-directly, and seeing what each call did on the server.
+**Chrome.** Attaches to a running browser over CDP, and does not enable the Debugger domain,
+so it runs alongside IntelliJ's JavaScript debugger. Records console messages, uncaught
+exceptions, and requests with status, timing, headers and bodies. New tabs are attached as they
+open. If Chrome restarts, the hub reconnects within about a second. The hub's own UI tab is
+skipped.
 
-- **Specs.** Add your OpenAPI 3.0/3.1 or Swagger 2.0 spec under Settings → API client: a URL
-  (Spring's springdoc serves it at `/v3/api-docs`, springfox at `/v2/api-docs`) or a file.
-  JSON is read as is; YAML through a small built-in reader that covers what specs use (block
-  maps and lists, quoted and block text, `[ ]` and `{ }`) and names the line of anything else
-  (anchors and aliases are not supported). **Load specs** in Settings checks each one. The
-  spec's operations are listed by tag, with their parameters, request body and responses;
-  `$ref`s within the spec are followed (references to other files are not). The server URL
-  comes from the spec (`servers`, or Swagger 2's `schemes`/`host`/`basePath`; relative ones
-  are resolved against the spec's URL) unless **Base URL** is set. Default headers are sent
-  when fetching a spec only from this machine or the base URL's host.
-- **Requests.** Pick an operation, or **+ New** for a request without a spec. The builder fills
-  in path, query, header and cookie parameters with the spec's examples (optional ones start
-  switched off; typing a value switches them on; enums become a menu), shows the default
-  headers from Settings (each can be turned off for the request, or overridden), and can
-  generate an example JSON body from the schema (`readOnly` properties are left out). A JSON
-  object body is form-encoded when the content type is `application/x-www-form-urlencoded`.
-  The URL line shows the URL as it will be sent. **Send** (`Ctrl+Enter`) sends it; **Cancel**
-  stops it. The values last used for each operation are remembered in the browser.
-- **How it is sent.** The hub sends the request itself, so CORS does not apply and any local
-  service can be reached. Redirects are returned as they are unless **Follow redirects** is on.
-  With `api.addRequestId` on, the request carries `correlation.header` with a fresh ID, so the
-  Tomcat log lines and queries it causes are linked to it on the timeline. Proxy variables
-  (`HTTP_PROXY`) are not used.
-- **Response.** Status, time, size, headers and the body (pretty-printed and highlighted;
-  binary bodies are not shown; up to 10 MB). **Show in timeline** closes the screen and selects
-  the request on the timeline, with its server events.
-- **On the timeline**, API requests are their own source (**API**), recorded like browser
-  requests: a request and its response, headers redacted per `redact.headers`, bodies cut at
-  `maxBodyBytes`.
-- **Saved requests.** **Save** puts the request in a catalog, with a name, a folder and a
-  description; the **Saved** list groups them by folder, and each can be sent at once (▶),
-  renamed or moved, duplicated or deleted. A request built from the spec is saved with
-  `{{baseUrl}}`, so it still works when the base URL changes. The catalog is
-  `api-requests.json` next to the settings file, so it can be backed up or put in git;
-  **Export** downloads it and **Import** merges a file into it (by id; variables by name) and
-  says what changed. An unreadable file is renamed aside, not overwritten.
-- **Variables.** `{{name}}` in a URL, parameter, header or body is filled in from
-  **Variables** (stored in the same file); `{{baseUrl}}` is built in. A request with an
-  unknown variable is not sent; the screen says which.
-- **History.** The last 50 sends are listed under **History** and can be opened again. They
-  are kept in the browser's local storage with the request's own headers, but not the default
-  headers from Settings.
-- **Recorded requests.** A browser (or API) request on the timeline offers **Replay** (send it
-  again now, through the hub, and select the new one), **Edit and send** (open it in the
-  builder) and **Save to catalog…**. Headers that cannot or should not be sent again are left
-  out (`Host`, `Content-Length`, `Connection`, `Accept-Encoding`, `sec-ch-*`, `sec-fetch-*`,
-  HTTP/2 pseudo-headers, the old request ID). A header redacted when it was recorded is sent
-  from the default headers if one has that name, and otherwise becomes `{{header-name}}`,
-  e.g. `{{authorization}}`, to fill in under Variables; Replay says so rather than sending
-  `[redacted]`. A body cut off at `maxBodyBytes` when recorded cannot be replayed. Chrome does
-  not report cookies with the request, so a cookie-based session has to be given as a
-  `Cookie` header.
-- **JSON viewer.** `src/ui/api.ts` exports `setJsonViewerOpener(fn)`; once given an opener, the
-  response pane shows **Open in JSON viewer** for JSON bodies.
+Chrome has to be started with a debugging port **and a profile folder of its own**: Chrome 136
+and later silently keep the port closed on the everyday profile, and a Chrome that is already
+running on the profile you start takes the new window over and drops the flags. The easiest
+way is the **Start Chrome** button (in the timeline while Chrome is not connected, on the
+Chrome status pill in the top bar, and under Settings > Browser). It starts Chrome directly,
+with `--remote-debugging-port=<chrome.port> --user-data-dir=<chrome.profileDir>`, does nothing
+if Chrome already answers on the port, and says what went wrong if the port does not open.
+Settings > Browser also shows the same command to run yourself (on Windows, for Command Prompt
+and for PowerShell) with every path written out, so it can go into a shortcut or an IntelliJ
+browser configuration.
 
-**Plain text:** default headers (`debug-hub.config.json`) and saved requests and variables
-(`api-requests.json`) are stored unencrypted. Keep real credentials out of files you share.
+**Tomcat logs folder.** With `tomcat.logsDir` set, every file in the folder is followed:
+names containing `access_log` as access logs, everything else as application logs, and files
+that appear later (the next day's logs) as they appear. Compressed archives and lock files are
+skipped, and a file also listed under `appLogs` or `accessLogs` is left to that list. Old
+rotated files cost almost nothing: files not written for an hour are only checked every few
+seconds, and even with `tail.fromStart` files older than a day are not replayed.
+
+**Tomcat application logs.** Follows the files, including date-rotated ones and truncation.
+A line that starts with neither a timestamp nor a level is treated as a continuation, so a
+stack trace is one event. Understands the Tomcat JUL layout, JUL's two-line default layout,
+and common Logback, Log4j, Log4j2 and Spring Boot layouts, including level-first lines without
+a timestamp (`DEBUG com.example.Foo - …`) that console appenders write into `catalina.out`.
+
+**Webapp labels.** Each Tomcat log entry and access-log request is labelled with the webapp it
+came from, where that can be told: by the log file's name (`shop.2026-11-16.log` is `shop`;
+Tomcat's own `catalina`, `localhost` and `manager` logs name no webapp), by Tomcat's context
+markers in the message (`in context with path [/shop]`, `Deploying web application directory
+[…/webapps/shop]`), and for requests by their context path. Request paths are only matched
+against webapps the hub knows: the contents of `tomcat.webappsDir` and `tomcat.disabledDir`
+(or the `webapps` folder next to the logs folder), plus names seen in log file names and
+deployment messages. `ROOT` is the `/` app.
+
+**Tomcat access logs.** Parses the common pattern, and the extended pattern in
+`docs/correlation.md` that adds duration and the request ID.
+
+**Postgres.** Follows the server log. Slow statements and `auto_explain` plans become query
+events with the SQL and plan separated; `DETAIL`, `HINT` and `STATEMENT` lines are folded
+into the error above them.
+
+## Configuration reference
+
+The **Settings** screen edits everything below. Each log path shows which files it matches as
+you type, and saving applies the change at once without a restart (except `port`). The desktop
+app stores settings in `debug-hub.config.json` in its user-data folder (`%APPDATA%\Debug Hub`
+on Windows; File → Open Config File); `npm start` uses that file in the folder it starts in,
+or `--config <file>`. Keys added by hand are kept when Settings saves the file.
+
+Relative paths are relative to the config file. Everything is optional. Windows paths can be
+written with forward slashes or pasted as they are (`C:\Users\me\logs`).
+
+| Key | Default | Meaning |
+|---|---|---|
+| `port` | `4000` | UI port. Also `--port`. |
+| `sessionsDir` | `sessions` | Where session files are written. |
+| `chrome.port` | `9222` | Chrome's remote debugging port. Also `--cdp-port`. |
+| `chrome.profileDir` | `chrome-profile` | The `--user-data-dir` that **Start Chrome** uses. Must not be Chrome's everyday profile (see below). |
+| `chrome.executable` | empty | Chrome for **Start Chrome**. Empty: the usual install locations (Program Files and `%LOCALAPPDATA%` on Windows, `/Applications` and `~/Applications` on macOS, `google-chrome`/`chromium` on `PATH` on Linux). |
+| `chrome.captureBodies` | `true` | Capture text and JSON response bodies. |
+| `chrome.bodyResourceTypes` | `XHR, Fetch, Document` | Resource types whose bodies are captured. |
+| `tomcat.enabled` | `false` | Turn on the Tomcat collectors. |
+| `tomcat.logsDir` | (empty) | A Tomcat logs folder, usually `CATALINA_BASE/logs`. Every log in it is followed; see below. |
+| `tomcat.appLogs` | `[]` | Application logs outside the logs folder. `*` is allowed in the file name. |
+| `tomcat.accessLogs` | `[]` | Access logs outside the logs folder. |
+| `tomcat.accessDurationUnit` | `ms` | Unit of `%D`: `ms` up to Tomcat 9, `us` from Tomcat 10. |
+| `tomcat.webappsDir` | (empty) | Tomcat's `webapps` folder, for the Tomcat page and WAR deploys. Its contents also name the webapps that events are labelled with. |
+| `tomcat.disabledDir` | (empty) | Where disabled webapps are moved. Must be outside `webappsDir`. |
+| `tomcat.startScript`, `tomcat.stopScript` | | Scripts run by Start Tomcat and Stop Tomcat (`.bat`, `.cmd`, `.ps1`, `.sh` or any program). Empty: Tomcat's own `bin/startup` and `bin/shutdown`. |
+| `tomcat.home` | (empty) | `CATALINA_HOME`, for Tomcat's own scripts. Empty: the folder above `webappsDir`, if it has `bin`. |
+| `tomcat.javaHome` | (empty) | `JAVA_HOME` for Tomcat's own scripts. Empty: Debug Hub's environment. |
+| `tomcat.startCommands` | `[]` | Commands run by Start Tomcat before Tomcat: `{ "name", "command", "cwd", "wait" }`. See below. |
+| `tomcat.startChrome` | `false` | Start Tomcat also starts Chrome with its debugging port, last. |
+| `tomcat.manager` | | Optional Tomcat Manager login: `{ "url": "http://localhost:8080/manager/text", "username": …, "password": … }`. The password is stored as plain text. |
+| `tomcat.warWatch` | `[]` | Folders where WARs are built; `*` matches any folder name, e.g. `C:/dev/*/target`. |
+| `tomcat.preserveFiles` | `["config.yaml", "config.js", "log4j2.xml"]` | File names (`*` allowed) a deploy can keep from the deployed copy instead of the new build's. |
+| `postgres.enabled`, `postgres.logs` | `false`, `[]` | Postgres server logs. |
+| `tail.fromStart` | `false` | Read existing log content at startup, not only new lines. |
+| `redact.headers` | `authorization, proxy-authorization, cookie, set-cookie` | Header values replaced with `[redacted]` before writing. |
+| `maxBodyBytes` | `65536` | Bodies above this are truncated; the event records the original size. |
+| `correlation.header` | `X-Request-Id` | Header that carries the request ID. |
+| `correlation.logPatterns` | `rid=…`, `requestId=…` | Regexes (one capture group) that find the ID in a log line or SQL comment. |
+| `correlation.timeWindowMs` | `2000` | Window for the timing fallback. |
+| `api.specs` | `[]` | OpenAPI/Swagger specs for the API screen: `{ "name", "url" }`, the URL an `http(s)://` or `file://` URL or a path (relative to the config file). |
+| `api.baseUrl` | (empty) | What `{{baseUrl}}` stands for, instead of the spec's servers. |
+| `api.headers` | `[]` | Default headers sent with every API request: `{ "name", "value" }`. **Stored as plain text.** |
+| `api.timeoutMs` | `30000` | How long an API request may take. |
+| `api.addRequestId` | `true` | Send `correlation.header` with a fresh ID on API requests, unless the request sets it. |
+| `api.insecureTls` | `false` | Accept self-signed and otherwise untrusted https certificates on API requests. |
+| `editor.kind` | (empty) | Go to source: `vscode`, `idea`, `emacs`, `nvim` or `custom`. Empty: off. |
+| `editor.program` | (empty) | The editor's program. Empty: found on `PATH` and in the usual install places. |
+| `editor.nvimReuse` | `true` | Neovim: open files in a running nvim instead of a new window. |
+| `editor.terminal` | `wezterm start --cwd {dir} -- {cmd}` | Neovim: the command that opens a terminal window running `{cmd}`. |
+| `editor.custom` | (empty) | Custom editor: a command with `{file}` `{line}` `{column}` `{dir}`. |
+| `editor.sourceDirs` | `[]` | Project folders to index besides those found above `tomcat.warWatch`. |
 
 ## Sessions and privacy
 
@@ -421,15 +482,17 @@ other origins, so another site open in your browser cannot read a session.
 ## Development
 
 ```
-npm test              # unit tests (parsers, tailer, store, correlation)
-npm run acceptance    # end-to-end against a real Chrome; set CHROME_PATH if it is not found
+npm test              # unit tests
 npm run typecheck
+npm run acceptance    # end-to-end against a real Chrome; set CHROME_PATH if it is not found
 npm run app           # the desktop app, from source
 ```
 
-Run from a clone, the app keeps itself up to date with `origin/main`: it checks at start and
-every 5 minutes, lists new commits, and on **Update and restart** pulls, runs `npm install` if
-dependencies changed, and starts `npm run app` again. See [docs/updates.md](docs/updates.md).
+The hub is plain Node and TypeScript (`src/server`), the UI plain TypeScript with no framework
+(`src/ui`), and the desktop app a small Electron shell (`src/shell`, `src/desktop`). `ws` is
+the only runtime dependency. Choices that differ from the original plan are in
+`docs/decisions.md`; request-ID setup for the app side is in `docs/correlation.md`. The
+screenshots above were taken with the demo app.
 
 ## Troubleshooting
 
