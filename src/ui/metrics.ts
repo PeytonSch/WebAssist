@@ -506,7 +506,7 @@ function renderCharts(): void {
   els.latency.replaceChildren(
     cardHead('Latency over time', `Median (p50) and p95 response time per ${fmtSpan(m.bucketMs)}, and the slowest request where it stands out.`, tableToggle('latency')),
     h('div', { class: 'mx-card-body' },
-      M.tables.has('latency') ? bucketTable(m, 'latency') : legend([{ label: 'p95', color: 'var(--viz-p95)', key: 'line' }, { label: 'p50', color: 'var(--viz-p50)', key: 'line' }, { label: 'Slowest request, where above p95', color: 'var(--viz-neutral)', key: 'dot' }]),
+      M.tables.has('latency') ? bucketTable(m, 'latency') : legend([{ label: 'p95', color: 'var(--viz-p95)', key: 'line' }, { label: 'p50', color: 'var(--viz-p50)', key: 'line' }, { label: 'Slowest request, where above p95 (▲ at the top: slower than the scale)', color: 'var(--viz-neutral)', key: 'dot' }]),
       M.tables.has('latency') ? null : latencyChart(m, width)),
   );
 }
@@ -689,9 +689,15 @@ function latencyChart(m: Metrics, width: number): SVGSVGElement {
   const plotH = H - top - bottom;
   const n = m.buckets.length;
   const slot = (right - left) / n;
-  const ticks = niceTicks(Math.max(1, ...m.buckets.map((b) => b.max ?? 0)));
+  // Scale to the percentile lines, so they stay readable: one 1.25 s report among requests of
+  // 1–2 ms would otherwise flatten them onto the axis. Slower requests than the scale holds are
+  // pinned to the top edge with their time (and the tooltip has it), unless they are close
+  // enough to fit anyway.
+  const p95Max = Math.max(0, ...m.buckets.map((b) => b.p95 ?? 0));
+  const slowest = Math.max(0, ...m.buckets.map((b) => b.max ?? 0));
+  const ticks = niceTicks(Math.max(1, slowest <= Math.max(p95Max * 3, 1) ? slowest : p95Max * 1.25));
   const yMax = ticks[ticks.length - 1];
-  const y = (v: number) => top + plotH - (v / yMax) * plotH;
+  const y = (v: number) => top + plotH - (Math.min(v, yMax) / yMax) * plotH;
   const cx = (i: number) => left + (i + 0.5) * slot;
   const svg = svgEl('svg', {
     width, height: H, viewBox: `0 0 ${width} ${H}`, class: 'mx-chart', role: 'img',
@@ -701,10 +707,28 @@ function latencyChart(m: Metrics, width: number): SVGSVGElement {
   const series: { key: 'p95' | 'p50'; color: string }[] = [{ key: 'p50', color: 'var(--viz-p50)' }, { key: 'p95', color: 'var(--viz-p95)' }];
   // The slowest request of an interval, where it stands above the p95 line: the outliers a
   // percentile hides (one slow report among thirty fast calls).
+  // Beyond the scale: a ▲ on the top edge. Each run of neighbouring ones gets one label, after
+  // its last ▲, with the run's slowest time, where it fits before the next run.
+  const runs: { from: number; to: number; max: number }[] = [];
   m.buckets.forEach((b, i) => {
-    if (b.max != null && b.p95 != null && y(b.p95) - y(b.max) >= 6) {
+    if (b.max == null || b.p95 == null) return;
+    if (b.max > yMax) {
+      const x = cx(i);
+      svg.append(svgEl('path', { d: `M${x - 5},${top + 7}L${x},${top - 1}L${x + 5},${top + 7}Z`, fill: 'var(--viz-neutral)', class: 'mx-dot' }));
+      const run = runs[runs.length - 1];
+      if (run && run.to === i - 1) {
+        run.to = i;
+        run.max = Math.max(run.max, b.max);
+      } else runs.push({ from: i, to: i, max: b.max });
+    } else if (y(b.p95) - y(b.max) >= 6) {
       svg.append(svgEl('circle', { cx: cx(i), cy: y(b.max), r: 4, fill: 'var(--viz-neutral)', class: 'mx-dot' }));
     }
+  });
+  runs.forEach((run, k) => {
+    const label = fmtMs(run.max);
+    const x = cx(run.to) + 9;
+    const room = (runs[k + 1] ? cx(runs[k + 1].from) - 8 : right) - x;
+    if (room >= label.length * 6.5) svg.append(svgText(x, top + 7, label, 'mx-endlabel'));
   });
   const ends: { key: string; x: number; y: number }[] = [];
   for (const s of series) {
