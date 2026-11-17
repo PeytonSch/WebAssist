@@ -65,10 +65,40 @@ The payload is code that runs with your user's permissions, fetched over HTTPS f
 repository's releases. The checksum guards against corrupt downloads, not against someone who
 can publish a release here: anyone with push access to tags can ship code to every install.
 
+## Running from a git checkout (npm run app)
+
+Run from a clone with `npm run app`, the app keeps that clone up to date with `origin/main`
+instead of using releases:
+
+- **At start**, the splash fetches `origin/main` (8 s limit; offline, it just starts). If there
+  are new commits it lists them and offers **Update and restart** or **Not now**.
+- **While it runs**, it checks every 5 minutes and asks the same way. **Later** is remembered
+  for those commits: it asks again only once `main` has moved on. **File › Check for Updates…**
+  checks now.
+- **Updating** quits the app, which stops the hub so the session file is complete, then
+  `scripts/update-and-restart.mjs` (on your normal `node`) waits for it to exit, runs
+  `git pull --ff-only origin main`, runs `npm install` if `package.json` or `package-lock.json`
+  changed, and starts `npm run app` again: the build, then the splash. On Windows the wait
+  matters, because a running Electron keeps its own files locked.
+- **If it fails** (a pull that cannot fast-forward, an `npm install` error), the version that was
+  there starts again and says why. The full output is in `git-update.log` in the user data
+  folder.
+
+It does not update a clone that is on another branch, has commits of its own that `main` does
+not, or has uncommitted changes to tracked files (untracked files are fine). It says so once per
+new `main` and leaves the pull to you. `git fetch` runs without prompting for a password, so a
+remote that needs one in a terminal fails the check (it is logged in `shell.log`); a credential
+manager, as Git for Windows sets up, works.
+
+After a restart the app is no longer attached to the terminal you started it from.
+
+Set `DEBUG_HUB_GIT_UPDATES=0` to turn this off for a run, and `DEBUG_HUB_GIT_UPDATE_MINUTES` to
+change the interval.
+
 ## Trying it locally
 
 ```
-npm run app                                   # run the desktop app from source (no update check)
+npm run app                                   # run the desktop app from source (git updates, no release check)
 DEBUG_HUB_UPDATE_URL=http://127.0.0.1:8000/latest.json npm run app   # against a local feed
 ```
 

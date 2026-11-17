@@ -372,6 +372,10 @@ npm run typecheck
 npm run app           # the desktop app, from source
 ```
 
+Run from a clone, the app keeps itself up to date with `origin/main`: it checks at start and
+every 5 minutes, lists new commits, and on **Update and restart** pulls, runs `npm install` if
+dependencies changed, and starts `npm run app` again. See [docs/updates.md](docs/updates.md).
+
 ## Troubleshooting
 
 | Symptom | Cause and fix |
