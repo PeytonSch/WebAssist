@@ -55,7 +55,7 @@ let lastStatus: Record<string, unknown> = { text: 'Starting…' };
 
 function setStatus(status: { text: string; percent?: number | null; version?: string }): void {
   lastStatus = status;
-  if (splash && !splash.isDestroyed()) splash.webContents.send('splash:status', status);
+  if (splash && !splash.isDestroyed() && !splash.webContents.isDestroyed()) splash.webContents.send('splash:status', status);
 }
 
 function createSplash(): BrowserWindow {
@@ -132,6 +132,8 @@ async function gitUpdateAtStartup(repo: string): Promise<boolean> {
   if (status.state !== 'available' || status.blocked) return false;
   setStatus({ text: 'An update is available' });
   const choice = await showUpdateWindow(await availableView(git, status, 'Not now'), { parent: splash, theme: savedTheme(userData), git });
+  // Quitting while it was open closes it too: then there is nothing left to start.
+  if (!splash || splash.isDestroyed()) return true;
   if (choice !== 'update') {
     setStatus({ text: 'Starting…' });
     return false;
@@ -166,7 +168,7 @@ async function main(): Promise<void> {
   const repo = !app.isPackaged && gitUpdatesEnabled() ? findRepo(__dirname) : null;
   const lastGitUpdate = repo ? takeUpdateResult(userData) : null;
   if (repo && (await gitUpdateAtStartup(repo))) {
-    splash.destroy();
+    if (splash && !splash.isDestroyed()) splash.destroy();
     splash = null;
     app.quit();
     return;
