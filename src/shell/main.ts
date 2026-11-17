@@ -2,6 +2,10 @@ import { app, BrowserWindow, dialog, nativeTheme, net, shell as electronShell } 
 import { appendFileSync, existsSync, mkdirSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { join } from 'node:path';
+import {
+  checkForGitUpdate, describeUpdate, findRepo, gitRunner, gitUpdatesEnabled, startGitUpdate, takeUpdateResult, updateLogFile,
+  type UpdateResult as GitUpdateResult,
+} from './gitupdate';
 import { Updater, type PayloadInfo, type UpdateResult } from './updater';
 
 /**
@@ -94,9 +98,60 @@ async function startPayload(payload: PayloadInfo): Promise<void> {
   await mod.run(ctx);
 }
 
+/** The splash waits this long at most for git; offline or slow, it starts without checking. */
+const GIT_STARTUP_TIMEOUT_MS = 8000;
+
+/**
+ * Run from a git checkout (npm run app): looks for new commits on origin/main while the splash
+ * shows, and offers to update. True when the update was started, so this copy should quit.
+ */
+async function gitUpdateAtStartup(repo: string): Promise<boolean> {
+  setStatus({ text: 'Checking for updates…' });
+  const status = await checkForGitUpdate(gitRunner(repo), { fetchTimeoutMs: GIT_STARTUP_TIMEOUT_MS });
+  log(`git update check: ${status.state === 'available' ? `${status.behind} behind${status.blocked ? ` (blocked: ${status.blocked})` : ''}` : status.state === 'error' ? status.message : status.state}`);
+  // Can't be applied automatically (local changes, another branch): not worth stopping every
+  // start for; the running app mentions it once (src/desktop/app.ts).
+  if (status.state !== 'available' || status.blocked) return false;
+  const { message, detail } = describeUpdate(status);
+  const { response } = await dialog.showMessageBox(splash!, {
+    type: 'info',
+    message,
+    detail,
+    buttons: ['Update and restart', 'Not now'],
+    defaultId: 0,
+    cancelId: 1,
+  });
+  if (response !== 0) return false;
+  setStatus({ text: 'Updating…' });
+  startGitUpdate(repo, userData);
+  log(`git update started: ${status.head.slice(0, 7)} → ${status.target.slice(0, 7)}`);
+  return true;
+}
+
+/** After an update by scripts/update-and-restart.mjs: says if it failed. */
+async function reportGitUpdate(r: GitUpdateResult | null): Promise<void> {
+  if (!r) return;
+  log(`git update result: ${JSON.stringify(r)}`);
+  if (r.ok) return;
+  await dialog.showMessageBox({
+    type: 'warning',
+    message: 'Debug Hub could not update',
+    detail: `${r.error ?? 'Unknown error'}\n\nThe version that was there has been started again. Details: ${updateLogFile(userData)}`,
+  });
+}
+
 async function main(): Promise<void> {
   splash = createSplash();
   const shownAt = Date.now();
+
+  const repo = !app.isPackaged && gitUpdatesEnabled() ? findRepo(__dirname) : null;
+  const lastGitUpdate = repo ? takeUpdateResult(userData) : null;
+  if (repo && (await gitUpdateAtStartup(repo))) {
+    splash.destroy();
+    splash = null;
+    app.quit();
+    return;
+  }
 
   const feed = process.env.DEBUG_HUB_UPDATE_URL ?? (app.isPackaged ? MANIFEST_URL : null);
   const bundledDir = app.isPackaged ? join(process.resourcesPath, 'payload') : join(__dirname, '..', 'payload');
@@ -149,6 +204,8 @@ async function main(): Promise<void> {
     app.exit(1);
     return;
   }
+
+  await reportGitUpdate(lastGitUpdate);
 
   if (outcome.result === 'shell-outdated') {
     const { response } = await dialog.showMessageBox({

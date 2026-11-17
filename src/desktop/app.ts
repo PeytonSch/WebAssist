@@ -2,6 +2,10 @@ import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, shell, type Ipc
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { environmentReport, startHub, type RunningHub } from '../server/embed';
+import {
+  checkEveryMs, checkForGitUpdate, describeUpdate, dismiss, dismissedTarget, findRepo, gitRunner, gitUpdatesEnabled, startGitUpdate,
+  type GitUpdateStatus,
+} from '../shell/gitupdate';
 import type { ShellContext } from '../shell/main';
 
 /**
@@ -104,6 +108,11 @@ export async function run(ctx: ShellContext): Promise<void> {
   win.on('unmaximize', sendMaximized);
   const openSettings = () => win.webContents.send('dh:open-settings');
 
+  // Run from a git checkout (npm run app): look for new commits on origin/main every few
+  // minutes and offer to update. Installed copies update from releases when they start instead.
+  const repo = !app.isPackaged && gitUpdatesEnabled() ? findRepo(__dirname) : null;
+  const gitUpdates = repo ? watchGitUpdates(repo, win, ctx) : null;
+
   const template: MenuItemConstructorOptions[] = [
     {
       label: process.platform === 'darwin' ? app.name : 'File',
@@ -115,7 +124,9 @@ export async function run(ctx: ShellContext): Promise<void> {
         { label: 'Open Config File', click: () => void shell.openPath(configFile) },
         { label: 'Run Environment Check…', click: () => void runEnvironmentCheck() },
         { type: 'separator' },
-        { label: 'Check for Updates and Restart', click: ctx.relaunch },
+        gitUpdates
+          ? { label: 'Check for Updates…', click: () => void gitUpdates.checkNow() }
+          : { label: 'Check for Updates and Restart', click: ctx.relaunch },
         { type: 'separator' },
         { role: 'quit' },
       ],
@@ -158,4 +169,70 @@ export async function run(ctx: ShellContext): Promise<void> {
     if (response === 0) openSettings();
     else if (response === 1) void shell.openPath(configFile);
   }
+}
+
+/**
+ * The background half of git updates (src/shell/gitupdate.ts; the splash does the check at
+ * start). An update that was answered "Later" is not offered again until main moves on.
+ */
+function watchGitUpdates(repo: string, win: BrowserWindow, ctx: ShellContext) {
+  const git = gitRunner(repo);
+  let asking = false;
+  let quitting = false;
+
+  const offer = async (status: Extract<GitUpdateStatus, { state: 'available' }>, fromMenu: boolean): Promise<void> => {
+    const { message, detail } = describeUpdate(status);
+    asking = true;
+    try {
+      if (status.blocked) {
+        await dialog.showMessageBox(win, { type: 'info', message, detail, buttons: ['OK'] });
+        dismiss(ctx.userData, status.target);
+        return;
+      }
+      const { response } = await dialog.showMessageBox(win, {
+        type: 'info',
+        message,
+        detail,
+        buttons: ['Update and restart', 'Later'],
+        defaultId: 0,
+        cancelId: 1,
+      });
+      if (response !== 0) {
+        // Asked from the menu, Later only closes the question; from the timer it is remembered.
+        if (!fromMenu) dismiss(ctx.userData, status.target);
+        return;
+      }
+      ctx.log(`git update started: ${status.head.slice(0, 7)} → ${status.target.slice(0, 7)}`);
+      quitting = true;
+      startGitUpdate(repo, ctx.userData);
+      // Quitting stops the hub first, so the session file is complete (before-quit in run()).
+      app.quit();
+    } finally {
+      asking = false;
+    }
+  };
+
+  const check = async (): Promise<void> => {
+    if (asking || quitting || win.isDestroyed()) return;
+    const status = await checkForGitUpdate(git);
+    if (status.state === 'error') ctx.log(`git update check: ${status.message}`);
+    if (status.state !== 'available' || status.target === dismissedTarget(ctx.userData) || asking || quitting) return;
+    await offer(status, false);
+  };
+
+  const timer = setInterval(() => void check(), checkEveryMs());
+  timer.unref();
+  win.on('closed', () => clearInterval(timer));
+
+  return {
+    /** From the menu: always answers, even "up to date". */
+    checkNow: async (): Promise<void> => {
+      if (asking || quitting) return;
+      const status = await checkForGitUpdate(git);
+      if (status.state === 'available') return offer(status, true);
+      await dialog.showMessageBox(win, status.state === 'up-to-date'
+        ? { type: 'info', message: 'Debug Hub is up to date', detail: `The checkout is at origin/main (${status.head.slice(0, 7)}).` }
+        : { type: 'warning', message: 'Could not check for updates', detail: status.message });
+    },
+  };
 }
