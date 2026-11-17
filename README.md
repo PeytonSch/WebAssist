@@ -67,9 +67,16 @@ npm install
 npm run app
 ```
 
-`npm run app` builds Debug Hub and opens it as a desktop app. The first time, it opens on
-**Settings** (later: File → Settings…, or `Ctrl+,`), where you point it at your setup. Each
-section says what it needs and shows what it finds as you type:
+`npm run app` builds Debug Hub and opens it as a desktop app. The first time, it opens the
+**setup guide**: it asks what you work with (Chrome, Tomcat, Postgres, your editor, REST APIs),
+then takes you through only those settings, one step at a time, saying what each one does, what a
+value looks like and whether you need it. It looks for Tomcat (including the run folders
+IntelliJ IDEA makes), Postgres logs, JDKs and built WARs in the usual places and offers what it
+finds, and nothing is saved until the last step. Open it again any time from the top of
+**Settings** (File → Settings…, or `Ctrl+,`).
+
+Settings itself has every option in one page. Each section says what it needs and shows what it
+finds as you type:
 
 - **Browser**: press **Start Chrome**. Chrome opens with a debugging port and a profile of its
   own, and the timeline starts filling as you use your app in it.

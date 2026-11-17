@@ -156,8 +156,8 @@ export async function run(ctx: ShellContext): Promise<void> {
       void themeOf(win).then((t) => saveTheme(ctx.userData, t));
     });
     win.webContents.once('did-fail-load', (_e, code, desc) => reject(new Error(`UI failed to load: ${desc} (${code})`)));
-    // On the very first run, open straight into Settings so the app can be pointed at the logs.
-    void win.loadURL(firstRun ? `${hub.url}/#settings` : hub.url);
+    // On the very first run, open Settings with the setup guide, to point the app at everything.
+    void win.loadURL(firstRun ? `${hub.url}/#settings/setup` : hub.url);
   });
 
   if (hub.configError) {

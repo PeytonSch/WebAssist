@@ -10,6 +10,7 @@ import { chromeSetup, startChrome } from './chrome-launch';
 import { matchPattern } from './collectors/tail';
 import { editableConfig, resolvePaths, saveConfig, validateConfig } from './config';
 import type { Hub } from './hub';
+import { detectSetup } from './setup-detect';
 import { sourceRoute } from './source/routes';
 import { tomcatRoute } from './tomcat/routes';
 
@@ -153,6 +154,11 @@ export function startServer(hub: Hub, uiDir: string, opts: ServerOptions): Promi
       }
       if (path === '/api/chrome/launch' && req.method === 'POST') {
         return json(res, 200, await startChrome(hub.cfg, configDir));
+      }
+
+      // Suggestions for the setup guide: Tomcat installs, Postgres logs, JDKs, WAR build folders.
+      if (path === '/api/setup/detect' && req.method === 'GET') {
+        return json(res, 200, detectSetup());
       }
 
       if (path === '/api/markers' && req.method === 'POST') {

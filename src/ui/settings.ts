@@ -7,6 +7,7 @@ import { chromeArgs, chromeCommandLines, typicalChromePath } from '../shared/chr
 import type { HubStatus } from '../shared/types';
 import { CHROME_LAUNCH_EVENT, chromeButton, chromeLaunchNote } from './chrome';
 import { $, fmtBytes, h, type Child } from './dom';
+import { guideOpen, openSetupGuide } from './setupguide';
 
 /**
  * The settings screen. It edits a draft copy of the config file; Save sends the whole draft to
@@ -62,6 +63,11 @@ let pendingSection: string | null = null;
 
 function scrollToPending(): void {
   if (!pendingSection || !S.draft) return;
+  if (pendingSection === 'setup') {
+    pendingSection = null;
+    launchGuide(true);
+    return;
+  }
   root().querySelector(`#set-${CSS.escape(pendingSection)}`)?.scrollIntoView({ block: 'start' });
   pendingSection = null;
 }
@@ -92,7 +98,7 @@ function clearError(path: string): void {
   const slot = S.errorSlots.get(path);
   if (!slot) return;
   slot.textContent = '';
-  slot.closest('.field, .list-row')?.classList.remove('invalid');
+  slot.closest('.field, .list-row, .gq')?.classList.remove('invalid');
 }
 
 function showErrors(errors: FieldError[]): void {
@@ -109,7 +115,7 @@ function showErrors(errors: FieldError[]): void {
       continue;
     }
     slot.textContent = e.message;
-    const host = slot.closest<HTMLElement>('.field, .list-row');
+    const host = slot.closest<HTMLElement>('.field, .list-row, .gq');
     host?.classList.add('invalid');
     first ??= host ?? slot;
   }
@@ -592,41 +598,47 @@ function renderChromeLaunch(): void {
   C.launch.replaceChildren(chromeButton({ disabled: unsaved || connected }), ...(note ? [note] : []));
 }
 
-function chromeFields(): HTMLElement[] {
+/** The live parts of the Chrome settings: what would start, and with which folders. */
+function chromeParts(): { launch: HTMLElement; commands: HTMLElement; exeNote: HTMLElement; profileNote: HTMLElement } {
   C.launch = h('div', { class: 'launch' });
   C.commands = h('div', { class: 'cmd-list' });
   C.exeNote = h('div', { class: 'list-note' });
   C.profileNote = h('div', { class: 'list-note' });
   C.key = null;
   S.derived.push(watchChromeSetup);
+  watchChromeSetup();
+  return { launch: C.launch, commands: C.commands, exeNote: C.exeNote, profileNote: C.profileNote };
+}
+
+function chromeFields(): HTMLElement[] {
+  const parts = chromeParts();
   const fields = [
     field('chrome.port', 'Debugging port', numberInput('chrome.port', { min: 1, max: 65535 }), 'Chrome’s --remote-debugging-port.'),
     field(
       null,
       'Start Chrome',
-      C.launch,
+      parts.launch,
       'Opens Chrome with the debugging port, on the profile folder below, so it starts without your usual sign-ins. Close other Chrome windows that use that folder first.',
     ),
     field(
       null,
       'Or start it yourself',
-      C.commands,
+      parts.commands,
       'For a terminal, a shortcut or IntelliJ. Close other Chrome windows that use this profile folder first: a Chrome already running on it takes over and drops the flags.',
     ),
     field(
       'chrome.profileDir',
       'Profile folder',
-      h('div', {}, folderInput('chrome.profileDir', 'Choose Chrome’s profile folder'), C.profileNote),
+      h('div', {}, folderInput('chrome.profileDir', 'Choose Chrome’s profile folder'), parts.profileNote),
       'Chrome’s --user-data-dir. Chrome 136 and later only open the debugging port with a profile folder of its own. A relative path is relative to the settings file.',
     ),
     field(
       'chrome.executable',
       'Chrome program',
-      h('div', {}, fileInput('chrome.executable', 'Choose the Chrome program', 'Found automatically'), C.exeNote),
+      h('div', {}, fileInput('chrome.executable', 'Choose the Chrome program', 'Found automatically'), parts.exeNote),
       'Leave empty to find Chrome automatically.',
     ),
   ];
-  watchChromeSetup();
   return fields;
 }
 
@@ -1538,6 +1550,7 @@ function render(): void {
   const scroller = h(
     'div',
     { class: 'settings-scroll' },
+    guideCard(),
     h('div', { class: 'settings-banner' }),
     ...cards,
   );
@@ -1602,11 +1615,10 @@ async function load(): Promise<void> {
   scrollToPending();
 }
 
-async function saveSettings(): Promise<void> {
-  if (!S.draft || S.saving || !dirty()) return;
-  S.saving = true;
-  renderFooter();
-  const sentPort = S.draft.port;
+type SaveOutcome = { ok: true; restartNeeded: boolean } | { ok: false; errors: FieldError[] } | { ok: false; message: string };
+
+/** Sends the draft to the hub; on success it becomes the saved settings. Draws nothing. */
+async function saveDraft(): Promise<SaveOutcome> {
   try {
     const res = await fetch('/api/config', {
       method: 'PUT',
@@ -1614,20 +1626,33 @@ async function saveSettings(): Promise<void> {
       body: JSON.stringify(S.draft),
     });
     const body = await res.json();
-    if (res.status === 400 && body.errors) {
-      showErrors(body.errors);
-      return;
-    }
+    if (res.status === 400 && body.errors) return { ok: false, errors: body.errors };
     if (!res.ok) throw new Error(body.error ?? `HTTP ${res.status}`);
     S.loaded = { ...S.loaded!, config: body.config, error: null };
     S.restartNeeded = body.restartNeeded;
     S.draft = structuredClone(body.config as Config);
     S.savedJson = JSON.stringify(S.draft);
+    return { ok: true, restartNeeded: body.restartNeeded };
+  } catch (err) {
+    return { ok: false, message: (err as Error).message };
+  }
+}
+
+async function saveSettings(): Promise<void> {
+  if (!S.draft || S.saving || !dirty() || guideOpen()) return;
+  S.saving = true;
+  renderFooter();
+  const sentPort = S.draft.port;
+  try {
+    const r = await saveDraft();
+    if (!r.ok) {
+      if ('errors' in r) showErrors(r.errors);
+      else renderBanner({ kind: 'error', text: `Could not save: ${r.message}` });
+      return;
+    }
     // Re-render so trimmed values and dropped blank rows show as saved.
     render();
-    if (!S.restartNeeded) toast(sentPort === S.loaded.runningPort ? 'Saved and applied' : 'Saved');
-  } catch (err) {
-    renderBanner({ kind: 'error', text: `Could not save: ${(err as Error).message}` });
+    if (!S.restartNeeded) toast(sentPort === S.loaded!.runningPort ? 'Saved and applied' : 'Saved');
   } finally {
     S.saving = false;
     renderFooter();
@@ -1639,6 +1664,110 @@ function toast(text: string): void {
   document.body.append(el);
   setTimeout(() => el.classList.add('out'), 1600);
   setTimeout(() => el.remove(), 2000);
+}
+
+// ── Setup guide ─────────────────────────────────────────
+// The guide (setupguide.ts) asks for the same settings one step at a time, with the controls
+// above, on the same draft: what it fills in shows here too, and Save in the guide saves it.
+
+/** Puts each error beside its control, if that control is showing; returns the rest. */
+function placeErrors(errors: FieldError[]): FieldError[] {
+  for (const path of S.errorSlots.keys()) clearError(path);
+  const rest: FieldError[] = [];
+  for (const e of errors) {
+    let key = e.path;
+    while (key && !S.errorSlots.has(key)) key = key.includes('.') ? key.slice(0, key.lastIndexOf('.')) : '';
+    const slot = key ? S.errorSlots.get(key) : undefined;
+    if (!slot) {
+      rest.push(e);
+      continue;
+    }
+    slot.textContent = e.message;
+    slot.closest('.field, .list-row, .gq')?.classList.add('invalid');
+  }
+  return rest;
+}
+
+/** An error line for `path`, for a control the guide lays out itself. */
+function errorSlot(path: string): HTMLElement {
+  const err = h('div', { class: 'field-error', role: 'alert' });
+  S.errorSlots.set(path, err);
+  return err;
+}
+
+export const settingsKit = {
+  isWindows,
+  isMac,
+  desktop: !!desktop,
+  get: getPath,
+  set: change,
+  /** The settings as last saved. */
+  saved: () => S.loaded?.config ?? null,
+  settingsFile: () => S.loaded?.file ?? '',
+  status: () => S.status,
+  dirty,
+  /** Starts a new page of controls: what the last one registered is dropped. */
+  beginPage: () => {
+    S.derived = [];
+    S.errorSlots.clear();
+    S.statusSlots = [];
+  },
+  errorSlot,
+  placeErrors,
+  save: saveDraft,
+  textInput,
+  numberInput,
+  toggle,
+  select,
+  folderInput,
+  fileInput,
+  logsFolderInput,
+  chipToggles,
+  listEditor,
+  rowsEditor,
+  startCommandsEditor,
+  tomcatHomeInput,
+  chromeParts,
+  editorProgramInput,
+  terminalInput,
+  patternTester,
+  projectsFound,
+  copyable,
+  RESOURCE_TYPES,
+  EDITORS,
+  TERMINALS,
+};
+export type SettingsKit = typeof settingsKit;
+
+/** `welcome`: opened by itself on the first start (#settings/setup), not from the button. */
+function launchGuide(welcome = false): void {
+  if (!S.draft || guideOpen()) return;
+  openSetupGuide(settingsKit, {
+    firstRun: welcome,
+    onClose: () => {
+      if (!S.open || !S.draft) return;
+      // Back to the settings page, with what the guide filled in.
+      render();
+      if (dirty()) renderBanner({ kind: 'info', text: 'Your answers from the setup guide are filled in below but not saved yet. Press Save to keep them.' });
+    },
+  });
+}
+
+function guideCard(): HTMLElement {
+  const btn = h('button', { type: 'button', class: 'btn btn-primary' }, 'Start the setup guide');
+  btn.addEventListener('click', () => launchGuide());
+  return h(
+    'section',
+    { class: 'guide-card' },
+    h('div', { class: 'guide-card-icon', 'aria-hidden': 'true' }, '✦'),
+    h(
+      'div',
+      { class: 'guide-card-text' },
+      h('h2', {}, 'New here, or not sure what to fill in?'),
+      h('p', {}, 'The setup guide walks you through every setting one step at a time: what it does, what a value looks like, and whether you need it at all.'),
+    ),
+    btn,
+  );
 }
 
 // ── Public ──────────────────────────────────────────────
@@ -1664,6 +1793,7 @@ export function openSettings(section?: string): void {
 
 export function closeSettings(): boolean {
   if (!S.open) return true;
+  if (guideOpen()) return false;
   if (dirty() && !confirm('Discard unsaved changes to settings?')) return false;
   S.open = false;
   S.draft = null;
