@@ -44,6 +44,9 @@ export function pathsMatch(a?: string, b?: string): boolean {
   return x.endsWith(y) || y.endsWith(x);
 }
 
+/** Where requests are made from: the browser, or the hub's API client. Both match the same way. */
+const sender = (source: string) => source === 'browser' || source === 'client';
+
 function methodsMatch(a?: string, b?: string): boolean {
   return !a || !b || a === b;
 }
@@ -62,7 +65,7 @@ export function correlate(target: CorrItem, all: CorrItem[], windowMs = 2000): C
   const end = target.tEnd ?? target.t;
   let approx: CorrItem[] = [];
 
-  if (target.source === 'browser' && target.group === 'network') {
+  if (sender(target.source) && target.group === 'network') {
     const access = all
       .filter(
         (x) =>
@@ -77,7 +80,7 @@ export function correlate(target: CorrItem, all: CorrItem[], windowMs = 2000): C
       .sort((p, q) => Math.abs(p.t - target.t) - Math.abs(q.t - target.t))[0];
     const logs = all.filter(
       (x) =>
-        x.source !== 'browser' &&
+        !sender(x.source) &&
         x.source !== 'hub' &&
         x.group !== 'network' &&
         !x.requestId &&
@@ -97,7 +100,7 @@ export function correlate(target: CorrItem, all: CorrItem[], windowMs = 2000): C
     // A Tomcat access-log line: find the browser request it served.
     approx = all.filter(
       (x) =>
-        x.source === 'browser' &&
+        sender(x.source) &&
         x.group === 'network' &&
         !x.requestId &&
         methodsMatch(x.method, target.method) &&
@@ -109,7 +112,7 @@ export function correlate(target: CorrItem, all: CorrItem[], windowMs = 2000): C
     // A server log line or query: find browser requests in flight at that moment.
     approx = all.filter(
       (x) =>
-        x.source === 'browser' &&
+        sender(x.source) &&
         x.group === 'network' &&
         !x.requestId &&
         target.t >= x.t - LOG_LEAD_MS &&

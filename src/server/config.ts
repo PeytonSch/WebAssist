@@ -83,6 +83,22 @@ export interface Config {
     logPatterns: string[];
     timeWindowMs: number;
   };
+  /** The API client screen: specs to load and how requests are sent. */
+  api: ApiClientConfig;
+}
+
+export interface ApiClientConfig {
+  /** OpenAPI/Swagger documents: a URL (e.g. http://localhost:8080/v3/api-docs) or a file. */
+  specs: { name: string; url: string }[];
+  /** Used instead of the spec's servers when set, e.g. http://localhost:8080/shop. */
+  baseUrl: string;
+  /** Sent with every request unless the request turns one off or sets its own. Plain text in the file. */
+  headers: { name: string; value: string }[];
+  /** Accept self-signed and otherwise untrusted https certificates. */
+  insecureTls: boolean;
+  timeoutMs: number;
+  /** Add the correlation header with a fresh ID, so the server's logs and queries link to the request. */
+  addRequestId: boolean;
 }
 
 export interface StartCommand {
@@ -135,6 +151,14 @@ export const DEFAULT_CONFIG: Config = {
     logPatterns: ['(?:\\brid|request[_-]?id|x-request-id)["\']?\\s*[=:]\\s*["\']?([A-Za-z0-9._-]{6,})'],
     timeWindowMs: 2000,
   },
+  api: {
+    specs: [],
+    baseUrl: '',
+    headers: [],
+    insecureTls: false,
+    timeoutMs: 30_000,
+    addRequestId: true,
+  },
 };
 
 const isObj = (v: unknown): v is Record<string, any> => !!v && typeof v === 'object' && !Array.isArray(v);
@@ -177,6 +201,9 @@ export function readRawConfig(file: string): Record<string, unknown> {
   return raw;
 }
 
+/** An http(s) or file: URL, as opposed to a path to a spec file. */
+export const isSpecUrl = (s: string) => /^(https?|file):/i.test(s);
+
 /** Makes the paths in a config absolute. Relative paths are relative to the config file. */
 export function resolvePaths(config: Config, base: string): Config {
   const abs = (p: string) => (isAbsolute(p) ? p : resolve(base, p));
@@ -197,6 +224,12 @@ export function resolvePaths(config: Config, base: string): Config {
   config.tomcat.javaHome = opt(config.tomcat.javaHome);
   config.tomcat.startCommands = config.tomcat.startCommands.map((c) => ({ ...c, cwd: abs(c.cwd || '.') }));
   config.postgres.logs = config.postgres.logs.map(abs);
+  // Spec files, not URLs, are relative to the settings file like every other path.
+  // A hand-edited file is not validated on load, so skip entries that are not { name, url }.
+  const specs: unknown[] = Array.isArray(config.api?.specs) ? config.api.specs : [];
+  config.api.specs = specs
+    .filter((s): s is { name: string; url: string } => isObj(s) && typeof s.url === 'string' && s.url.trim() !== '')
+    .map((s) => ({ name: String(s.name || s.url), url: isSpecUrl(s.url.trim()) ? s.url.trim() : abs(s.url.trim()) }));
   return config;
 }
 
@@ -367,6 +400,66 @@ export function validateConfig(input: unknown): { config: Config; errors: FieldE
       return (err as Error).message.replace(/^Invalid regular expression: /, '');
     }
   });
+
+  config.api = apiClient(config.api);
+
+  /** The API client's settings. Error paths name the row, e.g. api.specs.1.url. */
+  function apiClient(v: unknown): ApiClientConfig {
+    const d = DEFAULT_CONFIG.api;
+    if (!isObj(v)) {
+      errors.push({ path: 'api', message: 'Must be an object' });
+      return structuredClone(d);
+    }
+    const rows = (path: string, list: unknown): { at: string; item: Record<string, any> }[] => {
+      if (!Array.isArray(list)) {
+        errors.push({ path, message: 'Must be a list' });
+        return [];
+      }
+      return list.flatMap((item, i) => {
+        if (!isObj(item)) {
+          errors.push({ path: `${path}.${i}`, message: 'Must be an object' });
+          return [];
+        }
+        return [{ at: `${path}.${i}`, item }];
+      });
+    };
+    const specs: ApiClientConfig['specs'] = [];
+    const names = new Set<string>();
+    for (const { at, item } of rows('api.specs', v.specs)) {
+      const url = optText(`${at}.url`, item.url, 'URL');
+      let name = optText(`${at}.name`, item.name, 'Name');
+      if (!url && !name) continue;
+      if (!url) errors.push({ path: `${at}.url`, message: 'URL or file is required' });
+      else if (/^[a-z][a-z0-9+.-]*:\/\//i.test(url) && !/^(https?|file):\/\//i.test(url)) {
+        errors.push({ path: `${at}.url`, message: 'Must be an http://, https:// or file:// URL, or a file path' });
+      }
+      // Unnamed specs are named after where they come from.
+      if (!name) name = url.replace(/^[a-z]+:\/\//i, '').replace(/[?#].*$/, '').slice(0, 80);
+      if (names.has(name.toLowerCase())) errors.push({ path: `${at}.name`, message: `Another spec is already called ${name}` });
+      names.add(name.toLowerCase());
+      specs.push({ name, url });
+    }
+    const baseUrl = optText('api.baseUrl', v.baseUrl, 'Base URL').replace(/\/+$/, '');
+    if (baseUrl && !/^https?:\/\/[^/\s]+/i.test(baseUrl)) errors.push({ path: 'api.baseUrl', message: 'Must start with http:// or https://' });
+    const headers: ApiClientConfig['headers'] = [];
+    for (const { at, item } of rows('api.headers', v.headers)) {
+      const name = optText(`${at}.name`, item.name, 'Header');
+      // Values are kept as typed, apart from line breaks, which are never valid in a header.
+      const value = typeof item.value === 'string' ? item.value : item.value == null ? '' : String(item.value);
+      if (!name && !value.trim()) continue;
+      if (!/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(name)) errors.push({ path: `${at}.name`, message: name ? 'Not a valid HTTP header name' : 'Header name is required' });
+      if (/[\r\n]/.test(value)) errors.push({ path: `${at}.value`, message: 'A header value cannot contain line breaks' });
+      headers.push({ name, value });
+    }
+    return {
+      specs,
+      baseUrl,
+      headers,
+      insecureTls: bool('api.insecureTls', v.insecureTls ?? d.insecureTls),
+      timeoutMs: int('api.timeoutMs', v.timeoutMs ?? d.timeoutMs, 100, 600_000, 'Timeout'),
+      addRequestId: bool('api.addRequestId', v.addRequestId ?? d.addRequestId),
+    };
+  }
 
   /** Rows left completely blank are dropped; a row with anything in it needs a command. */
   function startCommands(v: unknown): StartCommand[] {

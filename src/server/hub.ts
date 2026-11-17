@@ -1,6 +1,7 @@
 import { dirname, join } from 'node:path';
 import type { WarInfo } from '../shared/tomcat';
 import type { CollectorStatus, HubEvent, HubStatus } from '../shared/types';
+import { ApiClient } from './apiclient/client';
 import { ChromeCollector } from './collectors/chrome';
 import { LogFileCollector } from './collectors/logfile';
 import { folderSource } from './collectors/logsdir';
@@ -28,6 +29,8 @@ export class Hub {
   private started = false;
   /** Webapps, Tomcat's start/stop scripts and the WAR watcher, for the Tomcat page. */
   tomcat: TomcatService;
+  /** The API screen's spec loading and request sending. */
+  api: ApiClient;
 
   constructor(public cfg: Config) {
     this.store = new SessionStore(cfg.sessionsDir);
@@ -36,6 +39,7 @@ export class Hub {
       emit: (ev) => this.emit(ev),
       onWar: (war) => this.listeners.forEach((l) => l.onWar?.(war)),
     });
+    this.api = new ApiClient(cfg, (ev) => this.emit(ev));
   }
 
   private build(): void {
@@ -111,6 +115,7 @@ export class Hub {
     this.cfg = { ...next, port };
     this.build();
     this.tomcat.reconfigure(this.cfg);
+    this.api.reconfigure(this.cfg);
     if (this.started) {
       this.chrome?.start();
       this.webapps?.start();
