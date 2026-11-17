@@ -1015,7 +1015,8 @@ function renderDetail(): void {
       ['Root cause', d.rootCause !== d.exception ? classFact(d.rootCause, 'exception') : null],
       ['Thread', d.thread], ['Severity', d.severity], ['Request ID', ridOf(row)], ['File', d.file],
     ]));
-    if (row.ev.source === 'tomcat') entry.append(sourceActions());
+    // Only entries that name a class: not Debug Hub's own notes (Start Tomcat, WAR builds).
+    if (row.ev.source === 'tomcat' && (d.logger || d.exception || d.stackFrames)) entry.append(sourceActions());
     add(entry);
   } else if (g === 'query') {
     add(section('Query', facts([
