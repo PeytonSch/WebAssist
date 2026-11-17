@@ -39,6 +39,10 @@
       <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"><path d="M13.5 9.5A6 6 0 0 1 6.5 2.5a5.5 5.5 0 1 0 7 7Z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg>
     </button>
     <button id="btn-help" class="btn btn-icon" title="Keyboard shortcuts (?)" aria-label="Keyboard shortcuts">?</button>
+    <button id="btn-api" class="btn" title="API: send requests to your REST endpoints, from an OpenAPI spec or by hand" aria-label="API">
+      <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M5.5 2.5c-1.5 0-2 .7-2 2v1.3c0 .9-.5 1.6-1.5 1.7v1c1 .1 1.5.8 1.5 1.7v1.3c0 1.3.5 2 2 2M10.5 2.5c1.5 0 2 .7 2 2v1.3c0 .9.5 1.6 1.5 1.7v1c-1 .1-1.5.8-1.5 1.7v1.3c0 1.3-.5 2-2 2" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <span class="btn-label">API</span>
+    </button>
     <button id="btn-tomcat" class="btn" title="Tomcat: start and stop the server and its webapps, deploy WARs" aria-label="Tomcat">
       <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><rect x="2" y="2.5" width="12" height="4.5" rx="1.2" fill="none" stroke="currentColor" stroke-width="1.3"/><rect x="2" y="9" width="12" height="4.5" rx="1.2" fill="none" stroke="currentColor" stroke-width="1.3"/><circle cx="4.8" cy="4.75" r=".9" fill="currentColor"/><circle cx="4.8" cy="11.25" r=".9" fill="currentColor"/></svg>
       <span class="btn-label">Tomcat</span>
@@ -96,6 +100,7 @@
 
   <div id="settings" class="settings" hidden></div>
   <div id="tomcat" class="tomcat" hidden></div>
+  <div id="api" class="apiscreen" hidden></div>
 
   <dialog id="prompt" class="dialog">
     <form method="dialog" id="prompt-form">

@@ -92,6 +92,35 @@ const PAGE = `<!doctype html>
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// The API described the way Spring's springdoc serves it at /v3/api-docs, for the API screen.
+const order = { type: 'object', properties: { id: { type: 'integer', format: 'int64', readOnly: true }, total: { type: 'number', example: 129.5 } } };
+const API_DOCS = {
+  openapi: '3.0.1',
+  info: { title: 'Demo shop', version: '1.0', description: 'The demo app\'s API. Order 42 fails on purpose; the revenue report is slow.' },
+  servers: [{ url: `http://localhost:${PORT}`, description: 'Generated server url' }],
+  paths: {
+    '/api/orders': {
+      get: { tags: ['orders'], operationId: 'listOrders', summary: 'List orders', parameters: [{ name: 'status', in: 'query', schema: { type: 'string', enum: ['open', 'shipped'] } }], responses: { 200: { description: 'The orders', content: { 'application/json': { schema: { type: 'object', properties: { orders: { type: 'array', items: { $ref: '#/components/schemas/Order' } } } } } } } } },
+      post: { tags: ['orders'], operationId: 'createOrder', summary: 'Create an order', requestBody: { required: true, content: { 'application/json': { schema: { $ref: '#/components/schemas/NewOrder' } } } }, responses: { 201: { description: 'Created', content: { 'application/json': { schema: { $ref: '#/components/schemas/Order' } } } } } },
+    },
+    '/api/orders/{id}': {
+      get: { tags: ['orders'], operationId: 'getOrder', summary: 'Get one order', description: 'Try `42` for a server error with a stack trace and a failed query.', parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'integer', format: 'int64' }, example: 41 }], responses: { 200: { description: 'The order', content: { 'application/json': { schema: { $ref: '#/components/schemas/Order' } } } }, 500: { description: 'Order 42 cannot be loaded' } } },
+    },
+    '/api/reports/revenue': {
+      get: { tags: ['reports'], operationId: 'revenue', summary: 'Revenue by region (slow)', responses: { 200: { description: 'The report' } } },
+    },
+    '/api/legacy/customers': {
+      get: { tags: ['legacy'], operationId: 'legacyCustomers', summary: 'Legacy lookup', deprecated: true, responses: { 500: { description: 'Always fails' } } },
+    },
+  },
+  components: {
+    schemas: {
+      NewOrder: { type: 'object', required: ['sku', 'qty'], properties: { sku: { type: 'string', example: 'A-100' }, qty: { type: 'integer', minimum: 1, example: 2 } } },
+      Order: { allOf: [{ $ref: '#/components/schemas/NewOrder' }, order] },
+    },
+  },
+};
+
 createServer(async (req, res) => {
   const startedAt = new Date();
   const url = new URL(req.url, `http://localhost:${PORT}`);
@@ -111,6 +140,7 @@ createServer(async (req, res) => {
 
   if (url.pathname === '/') return send(200, PAGE, 'text/html; charset=utf-8');
   if (url.pathname === '/favicon.ico') return send(204, '', 'image/x-icon');
+  if (url.pathname === '/v3/api-docs') return send(200, API_DOCS);
 
   if (url.pathname === '/api/orders' && req.method === 'GET') {
     tomcat('INFO', rid, 'com.example.orders.OrderController.list Listing orders for customer 7');
@@ -125,6 +155,11 @@ createServer(async (req, res) => {
     appendFileSync(POSTGRES, `${pgTs()} [4821] ERROR:  relation "order_items" does not exist at character 15\n${pgTs()} [4821] STATEMENT:  /* rid=${rid} */ SELECT * FROM order_items WHERE order_id = $1\n`);
     tomcat('SEVERE', rid, `org.apache.catalina.core.StandardWrapperValve.invoke Servlet.service() for servlet [dispatcher] in context with path [] threw exception\n${STACK('Order 42 could not be loaded')}`);
     return send(500, { error: 'Internal Server Error', message: 'Order 42 could not be loaded' });
+  }
+  if (/^\/api\/orders\/\d+$/.test(url.pathname)) {
+    const id = Number(url.pathname.split('/').pop());
+    tomcat('INFO', rid, `com.example.orders.OrderController.getOrder Loaded order ${id}`);
+    return send(200, { id, sku: 'A-100', qty: 2, total: 129.5 });
   }
   if (url.pathname === '/api/reports/revenue') {
     await sleep(1250);

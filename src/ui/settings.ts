@@ -756,6 +756,13 @@ function sections(): SectionDef[] {
       ],
     },
     {
+      id: 'api',
+      nav: 'API client',
+      title: 'API client',
+      desc: 'For the API screen: the OpenAPI or Swagger specs of your REST endpoints, and how requests are sent. Requests go from Debug Hub itself, so CORS does not apply.',
+      fields: apiClientFields,
+    },
+    {
       id: 'correlation',
       nav: 'Request matching',
       title: 'Request matching',
@@ -1019,6 +1026,144 @@ function tomcatManagementFields(): HTMLElement[] {
         ' allowed. When deploying a WAR, Debug Hub offers to keep these files from the deployed copy (anywhere in the webapp) instead of the ones in the new build, e.g. local settings you edited there.',
       ),
     ),
+  ];
+}
+
+// ── API client ──────────────────────────────────────────
+
+interface SpecStatusRow {
+  name: string;
+  url: string;
+  state: 'not-loaded' | 'loading' | 'loaded' | 'error';
+  error: string | null;
+  title: string | null;
+  operations: number;
+}
+
+/**
+ * Rows of a few text inputs each, e.g. a spec's name and URL. Errors come back as
+ * <path>.<i>.<key> and land beside that input; blank rows are dropped on save.
+ */
+function rowsEditor(
+  path: string,
+  fields: { key: string; label: string; placeholder: string; mono?: boolean; width?: string; secret?: boolean }[],
+  opts: { addLabel: string; empty: string; itemLabel: string; note?: (i: number) => HTMLElement | null },
+): HTMLElement {
+  const rowsEl = h('div', { class: 'list-rows' });
+  const add = h('button', { type: 'button', class: 'btn btn-ghost list-add' }, `+ ${opts.addLabel}`);
+  const values = (): Record<string, string>[] => structuredClone(getPath(path) ?? []);
+  const render = (focusLast = false) => {
+    for (const key of [...S.errorSlots.keys()]) if (key.startsWith(`${path}.`)) S.errorSlots.delete(key);
+    const vals = values();
+    rowsEl.replaceChildren(
+      ...(vals.length
+        ? vals.map((v, i) => {
+            const parts = fields.map((f) => {
+              const input = h('input', { type: 'text', class: `input${f.mono ? ' mono' : ''}`, placeholder: f.placeholder, spellcheck: 'false', autocomplete: 'off', 'aria-label': `${f.label} of ${opts.itemLabel.toLowerCase()} ${i + 1}` }) as HTMLInputElement;
+              input.value = String(v[f.key] ?? '');
+              input.addEventListener('input', () => {
+                const arr = values();
+                arr[i] = { ...arr[i], [f.key]: input.value };
+                change(path, arr);
+                clearError(`${path}.${i}.${f.key}`);
+              });
+              const err = h('div', { class: 'field-error', role: 'alert' });
+              S.errorSlots.set(`${path}.${i}.${f.key}`, err);
+              return h('div', { class: 'list-row', style: f.width ? `flex: ${f.width}` : 'flex: 1' }, input, err);
+            });
+            const remove = h('button', { type: 'button', class: 'btn btn-icon btn-ghost', title: 'Remove', 'aria-label': `Remove ${opts.itemLabel.toLowerCase()} ${i + 1}` }, '×');
+            remove.addEventListener('click', () => {
+              const arr = values();
+              arr.splice(i, 1);
+              change(path, arr);
+              render();
+            });
+            return h('div', { class: 'pair-row' }, h('div', { class: 'pair-inputs' }, ...parts, remove), opts.note?.(i) ?? null);
+          })
+        : [h('div', { class: 'list-empty' }, opts.empty)]),
+    );
+    if (focusLast) rowsEl.querySelector<HTMLInputElement>('.pair-row:last-child input')?.focus();
+  };
+  add.addEventListener('click', () => {
+    change(path, [...values(), Object.fromEntries(fields.map((f) => [f.key, '']))]);
+    render(true);
+  });
+  render();
+  return h('div', { class: 'list' }, rowsEl, add);
+}
+
+/** The specs with whether each loads, for the saved settings (the API screen uses those). */
+function specStatus(): HTMLElement {
+  const box = h('div', { class: 'list-note' });
+  const btn = h('button', { type: 'button', class: 'btn' }, 'Load specs') as HTMLButtonElement;
+  const out = h('div', { class: 'spec-status' });
+  const unsaved = () => JSON.stringify(getPath('api.specs') ?? []) !== JSON.stringify(S.loaded?.config.api?.specs ?? []);
+  const show = (rows: SpecStatusRow[]) => {
+    out.replaceChildren(
+      ...rows.map((r) =>
+        h('div', {}, r.state === 'loaded'
+          ? h('span', { class: 'pm ok' }, `${r.name}: ${r.title ?? ''} · ${r.operations} operations`)
+          : r.state === 'error'
+            ? h('span', { class: 'pm warn' }, `${r.name}: ${r.error}`)
+            : h('span', { class: 'pm muted' }, `${r.name}: not loaded yet`)),
+      ),
+    );
+  };
+  const run = async (load: boolean) => {
+    btn.disabled = true;
+    try {
+      let info: { specs: SpecStatusRow[] } = await (await fetch('/api/client')).json();
+      if (load) {
+        await Promise.all(info.specs.map((s) => fetch(`/api/client/specs/${encodeURIComponent(s.name)}?reload=1`).catch(() => undefined)));
+        info = await (await fetch('/api/client')).json();
+      }
+      show(info.specs);
+    } catch {
+      /* the hub is gone; the socket handler shows that */
+    } finally {
+      btn.disabled = false;
+    }
+  };
+  btn.addEventListener('click', () => void run(true));
+  const note = h('span', { class: 'pm warn' }, 'Save first: specs are loaded from the saved settings.');
+  const update = () => (note.hidden = !unsaved());
+  S.derived.push(update);
+  update();
+  void run(false);
+  box.append(out);
+  return h('div', {}, h('div', { class: 'input-row' }, btn, note), box);
+}
+
+function apiClientFields(): HTMLElement[] {
+  return [
+    field(
+      'api.specs',
+      'Specs',
+      rowsEditor('api.specs', [
+        { key: 'name', label: 'Name', placeholder: 'Shop', width: '0 0 150px' },
+        { key: 'url', label: 'URL or file', placeholder: 'http://localhost:8080/shop/v3/api-docs', mono: true },
+      ], { addLabel: 'Add spec', empty: 'No specs: the API screen can still send requests typed by hand.', itemLabel: 'Spec' }),
+      h('span', {}, 'OpenAPI 3 or Swagger 2, as JSON or YAML: a URL or a file. Spring’s springdoc serves it at ', h('code', {}, '/v3/api-docs'), ', springfox at ', h('code', {}, '/v2/api-docs'), '. A relative file path is relative to the settings file.'),
+    ),
+    field(null, 'Check', specStatus(), 'Fetches each saved spec and says whether it could be read.'),
+    field(
+      'api.baseUrl',
+      'Base URL',
+      textInput('api.baseUrl', { mono: true, placeholder: 'From the spec’s servers' }),
+      h('span', {}, 'What ', h('code', {}, '{{baseUrl}}'), ' stands for, instead of the server the spec names, e.g. ', h('code', {}, 'http://localhost:8080/shop'), '. Leave empty to use the spec’s.'),
+    ),
+    field(
+      'api.headers',
+      'Default headers',
+      rowsEditor('api.headers', [
+        { key: 'name', label: 'Header', placeholder: 'Authorization', mono: true, width: '0 0 190px' },
+        { key: 'value', label: 'Value', placeholder: 'Bearer eyJhbGciOi…', mono: true },
+      ], { addLabel: 'Add header', empty: 'None.', itemLabel: 'Header' }),
+      'Sent with every request unless a request turns one off or sets its own, e.g. a login token. Stored in the settings file as plain text; values of redacted headers (Privacy and limits) are not recorded on the timeline.',
+    ),
+    field('api.timeoutMs', 'Timeout', numberInput('api.timeoutMs', { min: 100, max: 600_000, unit: 'ms' }), 'How long to wait for a complete response.'),
+    field('api.addRequestId', 'Add a request ID', toggle('api.addRequestId', 'Add a request ID'), 'Sends the request ID header (Request matching) with a fresh ID, unless the request sets it, so the Tomcat log lines and queries a request causes are linked to it on the timeline.'),
+    field('api.insecureTls', 'Allow untrusted certificates', toggle('api.insecureTls', 'Allow untrusted certificates'), 'Accept self-signed or otherwise untrusted https certificates, as dev servers often have. Leave off for anything else.'),
   ];
 }
 

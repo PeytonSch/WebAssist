@@ -69,6 +69,57 @@ describe('validateConfig', () => {
     input.chrome.port = input.port;
     expect(validateConfig(input).errors.map((e) => e.path)).toContain('chrome.port');
   });
+
+  it('checks the API client settings row by row', () => {
+    const input: any = structuredClone(DEFAULT_CONFIG);
+    input.api = {
+      specs: [
+        { name: ' Shop ', url: ' http://localhost:8080/v3/api-docs ' },
+        { name: '', url: '' },
+        { name: '', url: 'specs/legacy.yaml' },
+        { name: 'shop', url: 'ftp://x/spec' },
+        { name: 'No URL', url: '' },
+      ],
+      baseUrl: 'http://localhost:8080/shop/',
+      headers: [
+        { name: 'Authorization', value: 'Bearer abc ' },
+        { name: '', value: '' },
+        { name: 'Bad Header', value: 'x' },
+        { name: 'X-Line', value: 'a\nb' },
+      ],
+      timeoutMs: 50,
+      insecureTls: 'yes',
+    };
+    const { config, errors } = validateConfig(input);
+    expect(errors.map((e) => e.path).sort()).toEqual([
+      'api.headers.2.name',
+      'api.headers.3.value',
+      'api.insecureTls',
+      'api.specs.3.name',
+      'api.specs.3.url',
+      'api.specs.4.url',
+      'api.timeoutMs',
+    ]);
+    expect(config.api.specs.slice(0, 2)).toEqual([
+      { name: 'Shop', url: 'http://localhost:8080/v3/api-docs' },
+      { name: 'specs/legacy.yaml', url: 'specs/legacy.yaml' },
+    ]);
+    expect(config.api.baseUrl).toBe('http://localhost:8080/shop');
+    expect(config.api.headers[0]).toEqual({ name: 'Authorization', value: 'Bearer abc ' });
+    expect(config.api.addRequestId).toBe(true);
+    expect(validateConfig({ ...structuredClone(DEFAULT_CONFIG), api: { baseUrl: 'localhost:8080' } }).errors.map((e) => e.path)).toEqual(['api.baseUrl']);
+  });
+
+  it('resolves spec files against the settings folder but leaves URLs alone', () => {
+    const file = join(dir, 'debug-hub.config.json');
+    writeFileSync(file, JSON.stringify({ api: { specs: [{ name: 'a', url: 'specs/a.yaml' }, { name: 'b', url: 'http://h/v3/api-docs' }, { url: 7 }] } }));
+    const { config } = loadConfig(file);
+    expect(config.api.specs).toEqual([
+      { name: 'a', url: join(dir, 'specs', 'a.yaml') },
+      { name: 'b', url: 'http://h/v3/api-docs' },
+    ]);
+    expect(config.api.timeoutMs).toBe(30_000);
+  });
 });
 
 describe('saveConfig', () => {
