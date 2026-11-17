@@ -869,7 +869,7 @@ function renderSide(): void {
 
   const actions = h('div', { class: 'jv-actions' },
     copyButton('Copy value', 'Copy the value as JSON (Ctrl+C in the tree)', () => stringify(n)),
-    s.path.length ? button('Show only this', 'Put this path in the query box', () => drill(s.path)) : null,
+    s.path.length && !(d.tops.length === 1 && jsPath(d.tops[0].path) === js) ? button('Show only this', 'Put this path in the query box', () => drill(s.path)) : null,
     canTable(n) ? button('Table', 'Show this as a table', () => {
       d.table = { node: n, path: s.path };
       d.sort = null;
@@ -1182,10 +1182,12 @@ export function closeJsonViewer(): void {
 
 export function initJsonViewer(opts: { onToggle: (open: boolean) => void }): void {
   onToggle = opts.onToggle;
-  // The payload lives only in memory, so a reload cannot bring it back: drop a leftover #json.
-  if (location.hash === '#json') history.replaceState(null, '', location.pathname + location.search);
+  // The payload lives only in memory, so a reload or a typed #json cannot bring it back: drop it.
+  const dropHash = () => history.replaceState(null, '', location.pathname + location.search);
+  if (location.hash === '#json') dropHash();
   window.addEventListener('hashchange', () => {
     if (V.open && location.hash !== '#json') closeJsonViewer();
+    else if (!V.open && location.hash === '#json') dropHash();
   });
 
   document.addEventListener('keydown', (e) => {
