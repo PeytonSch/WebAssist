@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
-  cellOf, compareNodes, findJsonIn, findTable, jsonPath, jsPath, lossyNumber, parseJson, preview, QueryError, runQuery,
-  search, stringify, tableOf, toPlain, walk, type JNode,
+  canTable, cellOf, compareNodes, findJsonIn, findTable, jsonPath, jsPath, lossyNumber, parseJson, preview, QueryError, runQuery,
+  search, stringify, stringifyCapped, tableOf, toPlain, walk, type JNode,
 } from '../src/ui/jsonmodel';
 
 const SAMPLES = [
@@ -247,6 +247,8 @@ describe('tables', () => {
     expect(t.columns).toEqual(['name', 'age']);
     expect(tableOf(parseJson('[1,2,3]').root!)).toBeNull();
     expect(tableOf(parseJson('{"a":1}').root!)).toBeNull();
+    // An envelope of unrelated objects is not a table.
+    expect(tableOf(parseJson('{"meta":{"count":1,"page":2},"data":{"items":[]}}').root!)).toBeNull();
   });
 
   it('caps the columns', () => {
@@ -269,6 +271,18 @@ describe('tables', () => {
 });
 
 describe('helpers', () => {
+  it('prints only the start of big values when capped', () => {
+    const root = parseJson(JSON.stringify({ items: Array.from({ length: 5000 }, (_, i) => ({ id: i, name: `n${i}` })) })).root!;
+    const capped = stringifyCapped(root, 2, 1000);
+    expect(capped.cut).toBe(true);
+    expect(capped.text.length).toBe(1000);
+    expect(stringify(root).startsWith(capped.text)).toBe(true);
+    const small = parseJson('{"a":[1,{"b":null}]}').root!;
+    expect(stringifyCapped(small, 2, 1000)).toEqual({ text: stringify(small), cut: false });
+    expect(canTable(root)).toBe(false);
+    expect(canTable((root as { vals: JNode[] }).vals[0])).toBe(true);
+  });
+
   it('previews values on one line', () => {
     const root = parseJson('{"id":1,"name":"Ada","tags":["x"],"o":{}}').root!;
     expect(preview(root)).toBe('{id: 1, name: "Ada", tags: […], o: {}}');

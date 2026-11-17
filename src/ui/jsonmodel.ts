@@ -276,12 +276,32 @@ function errorAt(s: string, message: string, pos: number): ParseError {
 
 /** Serializes back to JSON text, numbers as written. `indent` 0 gives compact output. */
 export function stringify(node: JNode, indent = 2): string {
-  const out: string[] = [];
-  write(node, '', indent, out);
-  return out.join('');
+  return stringifyCapped(node, indent, Infinity).text;
 }
 
-function write(node: JNode, pad: string, indent: number, out: string[]): void {
+/**
+ * Like stringify, but stops at about `limit` characters, for showing the start of a big value
+ * without printing all of it. `cut` says the text stops early (and is then not valid JSON).
+ */
+export function stringifyCapped(node: JNode, indent: number, limit: number): { text: string; cut: boolean } {
+  const out = new Writer(limit);
+  write(node, '', indent, out);
+  return { text: out.parts.join(''), cut: out.left <= 0 };
+}
+
+/** Collects output, counting down what is left of the limit. */
+class Writer {
+  parts: string[] = [];
+  constructor(public left: number) {}
+  push(text: string): void {
+    if (this.left <= 0) return;
+    if (text.length > this.left) text = text.slice(0, this.left);
+    this.parts.push(text);
+    this.left -= text.length;
+  }
+}
+
+function write(node: JNode, pad: string, indent: number, out: Writer): void {
   switch (node.t) {
     case 'str': out.push(JSON.stringify(node.v)); return;
     case 'num': out.push(node.raw); return;
@@ -297,16 +317,23 @@ function write(node: JNode, pad: string, indent: number, out: string[]): void {
   const inner = indent ? pad + ' '.repeat(indent) : '';
   const nl = indent ? '\n' : '';
   out.push(open);
-  for (let k = 0; k < size; k++) {
+  for (let k = 0; k < size && out.left > 0; k++) {
     out.push(k ? ',' + nl + inner : nl + inner);
     if (node.t === 'obj') {
-      out.push(JSON.stringify(node.keys[k]), indent ? ': ' : ':');
+      out.push(JSON.stringify(node.keys[k]));
+      out.push(indent ? ': ' : ':');
       write(node.vals[k], inner, indent, out);
     } else {
       write(node.items[k], inner, indent, out);
     }
   }
   out.push(nl + pad + close);
+}
+
+/** Whether tableOf would give a table, without building it. */
+export function canTable(node: JNode): boolean {
+  if (node.t === 'arr') return node.items.some((v) => v.t === 'obj');
+  return node.t === 'obj' && isRecordMap(node);
 }
 
 /** Plain JS value (numbers via Number, so big ones lose precision). For tests and comparisons. */
@@ -548,7 +575,7 @@ class QueryParser {
       this.fail('Expected an index, a quoted key, * or ?(…) inside [ ]');
     }
     this.ws();
-    if (!this.eat(']')) this.fail(`Expected ']' to close the '[' at ${open + 1}`);
+    if (!this.eat(']')) this.fail(`Missing ']' for the '[' at col ${open + 1}`);
     return step;
   }
 
@@ -818,7 +845,7 @@ export interface Table {
 export function tableOf(node: JNode, maxColumns = 100): Table | null {
   let rows: Table['rows'];
   if (node.t === 'arr') rows = node.items.map((v, i) => ({ seg: i, node: v }));
-  else if (node.t === 'obj' && node.vals.length >= 2 && node.vals.every((v) => v.t === 'obj')) rows = node.keys.map((k, i) => ({ seg: k, node: node.vals[i] }));
+  else if (node.t === 'obj' && isRecordMap(node)) rows = node.keys.map((k, i) => ({ seg: k, node: node.vals[i] }));
   else return null;
   const seen = new Set<string>();
   const columns: string[] = [];
@@ -837,6 +864,20 @@ export function tableOf(node: JNode, maxColumns = 100): Table | null {
   }
   if (!seen.size && !rows.some((r) => r.node.t === 'obj')) return null;
   return { columns: columns.slice(0, maxColumns), hiddenColumns: Math.max(0, columns.length - maxColumns), rows, valueColumn };
+}
+
+/**
+ * An object whose values are records of the same shape ({"u1": {name…}, "u2": {name…}}), as
+ * opposed to an ordinary object that happens to hold objects ({meta: {…}, data: {…}}): at
+ * least two values, all objects, sharing at least half of their keys.
+ */
+function isRecordMap(node: JObj): boolean {
+  if (node.vals.length < 2 || !node.vals.every((v) => v.t === 'obj')) return false;
+  const records = node.vals as JObj[];
+  const union = new Set(records.flatMap((r) => r.keys));
+  let shared = 0;
+  for (const k of union) if (records.every((r) => r.keys.includes(k))) shared++;
+  return shared > 0 && shared * 2 >= union.size;
 }
 
 /** A row's value for a column (the last one, like JSON.parse, if a key repeats). */
