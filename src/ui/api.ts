@@ -1332,8 +1332,9 @@ function refresh(): void {
       if (n && i < 2) n.textContent = ` ${i === 0 ? p : hd}`;
     });
   }
-  const dot = root().querySelector('.api-saved .api-item.active .api-dirty');
-  if (!!dot !== dirty() && A.side === 'saved') renderSide();
+  // The unsaved-changes dot on the open request in the Saved list.
+  const active = root().querySelector('.api-saved .api-item.active');
+  if (active && !!active.querySelector('.api-dirty') !== dirty()) renderSide();
 }
 
 // ── Response ────────────────────────────────────────────
@@ -1427,6 +1428,13 @@ function renderResponse(): void {
 
 async function replayOf(data: Record<string, any>): Promise<Replay> {
   await ensureLoaded();
+  // The chosen spec's server can stand in for {{baseUrl}}: load it if needed, but do not keep
+  // the user waiting on a spec that does not answer.
+  const name = A.specName && A.info?.specs.some((s) => s.name === A.specName) ? A.specName : A.info?.specs[0]?.name;
+  if (name && !A.specs.has(name) && !A.info?.baseUrl) {
+    await Promise.race([ensureSpec(name), new Promise((r) => setTimeout(r, 3000))]);
+    if (!A.specName && A.specs.has(name)) A.specName = name;
+  }
   // Specs already loaded offer their servers for {{baseUrl}}; Settings' base URL comes first.
   const bases = [A.info?.baseUrl ?? '', baseUrl(), ...[...A.specs.values()].flatMap((s) => s.servers.map((x) => x.url))].filter(Boolean);
   return replayFromEvent(data, {
