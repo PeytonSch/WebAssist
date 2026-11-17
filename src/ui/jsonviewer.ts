@@ -11,6 +11,7 @@
 
 import { $, fmtBytes, h, type Child } from './dom';
 import { highlight, paint } from './highlight';
+import { completions, nestedFallback, type Suggestion } from './jsoncomplete';
 import {
   canTable, cellOf, compareNodes, describe, findTable, isContainer, jsonPath, jsPath, lossyNumber, parseJson, plural, preview,
   QueryError, runQuery, search, sizeOf, stringify, stringifyCapped, tableOf, walk,
@@ -54,6 +55,8 @@ interface Doc {
   expanded: WeakSet<JNode>;
   query: string;
   queryError: QueryError | null;
+  /** Set when the query found nothing from the top and is shown at any depth instead: "..price". */
+  queryNested: string | null;
   tops: Top[];
   sel: { node: JNode; path: Seg[] } | null;
   search: string;
@@ -239,7 +242,7 @@ function rowPath(r: Row): Seg[] {
 function newDoc(src: JsonSource): Doc {
   const parsed = parseJson(src.text);
   const d: Doc = {
-    src, parsed, mode: parsed.root ? 'tree' : 'raw', expanded: new WeakSet(), query: '', queryError: null,
+    src, parsed, mode: parsed.root ? 'tree' : 'raw', expanded: new WeakSet(), query: '', queryError: null, queryNested: null,
     tops: parsed.root ? [{ node: parsed.root, path: [], label: null }] : [], sel: null, search: '', filter: false, table: null, sort: null,
   };
   if (parsed.root) {
@@ -602,7 +605,16 @@ function applyQuery(expr: string): void {
   if (!root) return;
   d.query = expr;
   try {
-    const hits = expr.trim() ? runQuery(root, expr) : [{ node: root, path: [] as Seg[] }];
+    let hits = expr.trim() ? runQuery(root, expr) : [{ node: root, path: [] as Seg[] }];
+    d.queryNested = null;
+    // "price" typed at the top when it is further down: show it wherever it is, and say so.
+    if (!hits.length) {
+      const nested = nestedFallback(root, expr);
+      if (nested) {
+        hits = nested.hits;
+        d.queryNested = nested.expr;
+      }
+    }
     d.queryError = null;
     d.tops = hits.length === 1
       ? [{ node: hits[0].node, path: hits[0].path, label: hits[0].path.length ? jsPath(hits[0].path) : null }]
@@ -638,9 +650,11 @@ function renderQueryStatus(): void {
     el.textContent = `${d.queryError.message} (col ${d.queryError.pos + 1})`;
     el.title = d.queryError.message;
   } else if (d.query.trim()) {
-    el.textContent = d.tops.length ? (d.tops.length === 1 ? '1 result' : `${d.tops.length.toLocaleString('en-US')} results`) : 'No match';
+    const n = d.tops.length === 1 ? '1 result' : `${d.tops.length.toLocaleString('en-US')} results`;
+    el.textContent = !d.tops.length ? 'No match' : d.queryNested ? `${n} further down (${d.queryNested})` : n;
     if (!d.tops.length) el.classList.add('error');
-    el.title = '';
+    else if (d.queryNested) el.classList.add('nested');
+    el.title = d.queryNested ? `Nothing at ${d.query.trim()} from the top, so it is matched at any depth: ${d.queryNested}` : '';
   } else {
     el.textContent = '';
   }
@@ -984,6 +998,114 @@ function exportText(d: Doc): string {
   return d.parsed.root && !d.parsed.partial && !d.parsed.error ? stringify(d.parsed.root) : d.src.text;
 }
 
+// ── Path suggestions ────────────────────────────────────
+
+/** Closes the Path box's suggestion list; true if it was open. Set while the viewer is built. */
+let closeSuggestions: () => boolean = () => false;
+
+/** Long nested paths lose their middle, not their end: the end is the key that matched. */
+function middleEllipsis(text: string, max: number): string {
+  if (text.length <= max) return text;
+  const tail = Math.ceil((max - 1) * 0.6);
+  return `${text.slice(0, max - 1 - tail)}…${text.slice(-tail)}`;
+}
+
+const KIND_TAG: Record<Suggestion['kind'], string> = { key: '', index: '', nested: 'nested', 'any-depth': 'any depth' };
+
+/**
+ * The suggestion list under the Path box: keys at the place being typed and matching keys
+ * further down (jsoncomplete.ts). ↑↓ choose, Tab or Enter take one, Esc closes it. Taking one
+ * applies it straight away and offers what comes next.
+ */
+function suggestList(input: HTMLInputElement, root: () => JNode | null, apply: (text: string) => void) {
+  const el = h('div', { class: 'jv-suggest', role: 'listbox', id: 'jv-suggest', hidden: '' });
+  input.setAttribute('role', 'combobox');
+  input.setAttribute('aria-autocomplete', 'list');
+  input.setAttribute('aria-controls', 'jv-suggest');
+  input.setAttribute('aria-expanded', 'false');
+  let items: Suggestion[] = [];
+  let active = -1;
+  let timer = 0;
+
+  const close = (): boolean => {
+    clearTimeout(timer);
+    const was = !el.hidden;
+    el.hidden = true;
+    input.setAttribute('aria-expanded', 'false');
+    input.removeAttribute('aria-activedescendant');
+    active = -1;
+    return was;
+  };
+  const highlightActive = () => {
+    el.querySelectorAll('.jv-sug').forEach((o, i) => o.classList.toggle('active', i === active));
+    if (active >= 0) {
+      input.setAttribute('aria-activedescendant', `jv-sug-${active}`);
+      el.children[active]?.scrollIntoView({ block: 'nearest' });
+    } else input.removeAttribute('aria-activedescendant');
+  };
+  const render = () => {
+    const r = root();
+    // Only when the caret is at the end: suggestions replace the text up to the step being typed.
+    items = r && document.activeElement === input && input.selectionStart === input.value.length ? completions(r, input.value) : [];
+    active = -1;
+    if (!items.length) return void close();
+    el.replaceChildren(...items.map((s, i) => {
+      const tag = KIND_TAG[s.kind];
+      const opt = h('div', { class: `jv-sug ${s.kind}`, role: 'option', id: `jv-sug-${i}`, title: s.text },
+        h('span', { class: 'jv-sug-label' }, middleEllipsis(s.label, 56)),
+        tag ? h('span', { class: 'jv-sug-tag' }, tag) : null,
+        h('span', { class: 'jv-sug-detail' }, s.detail));
+      // mousedown, not click: the input must keep focus.
+      opt.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        take(i);
+      });
+      return opt;
+    }));
+    el.hidden = false;
+    input.setAttribute('aria-expanded', 'true');
+    highlightActive();
+  };
+  const take = (i: number) => {
+    const s = items[i];
+    if (!s) return;
+    input.value = s.text;
+    input.setSelectionRange(s.text.length, s.text.length);
+    apply(s.text);
+    render();
+  };
+
+  input.addEventListener('input', () => {
+    clearTimeout(timer);
+    timer = window.setTimeout(render, 60);
+  });
+  input.addEventListener('focus', render);
+  input.addEventListener('blur', () => close());
+  input.addEventListener('keydown', (e) => {
+    if (el.hidden) {
+      if (e.key === 'ArrowDown' || (e.key === ' ' && e.ctrlKey)) {
+        e.preventDefault();
+        render();
+      }
+      return;
+    }
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      const n = items.length;
+      active = e.key === 'ArrowDown' ? (active + 1) % n : active <= 0 ? n - 1 : active - 1;
+      highlightActive();
+    } else if (e.key === 'Tab' && !e.shiftKey) {
+      e.preventDefault();
+      take(active >= 0 ? active : 0);
+    } else if (e.key === 'Enter' && active >= 0) {
+      e.preventDefault();
+      take(active);
+    }
+  });
+  closeSuggestions = close;
+  return { el, close };
+}
+
 function renderShell(): void {
   const d = doc();
   const parent = V.stack.length > 1 ? V.stack[V.stack.length - 2] : null;
@@ -1014,13 +1136,18 @@ function renderShell(): void {
   }) as HTMLInputElement;
   query.value = d.query;
   let qTimer = 0;
+  const suggest = suggestList(query, () => doc().parsed.root, (text) => {
+    clearTimeout(qTimer);
+    applyQuery(text);
+  });
   query.addEventListener('input', () => {
     clearTimeout(qTimer);
     qTimer = window.setTimeout(() => applyQuery(query.value), 250);
   });
   query.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') {
+    if (e.key === 'Enter' && !e.defaultPrevented) {
       clearTimeout(qTimer);
+      suggest.close();
       applyQuery(query.value);
     }
   });
@@ -1068,7 +1195,7 @@ function renderShell(): void {
 
   const tools = h('div', { class: 'jv-tools' },
     h('div', { class: 'jv-seg', role: 'group', 'aria-label': 'View' }, modes.tree, modes.table, modes.raw),
-    h('div', { class: 'jv-field jv-query' }, h('span', { class: 'jv-label' }, 'Path'), query, clearQuery),
+    h('div', { class: 'jv-field jv-query' }, h('span', { class: 'jv-label' }, 'Path'), query, clearQuery, suggest.el),
     queryStatus,
     h('div', { class: 'jv-field jv-search' }, searchIn,
       button('↑', 'Previous match (Shift+Enter)', () => nextMatch(-1), 'jv-clear'),
@@ -1201,6 +1328,7 @@ export function initJsonViewer(opts: { onToggle: (open: boolean) => void }): voi
       e.preventDefault();
       // The timeline's own Escape (close the detail panel) must not also run once this closes.
       e.stopImmediatePropagation();
+      if (closeSuggestions()) return;
       if (typing) {
         t.blur();
         focusMain();

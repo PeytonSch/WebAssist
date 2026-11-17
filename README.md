@@ -206,6 +206,12 @@ selected). It opens full-window over the timeline; `Esc` or **Back** returns to 
 - **Path** shows part of the document: `data.items`, `items[0].name`, `items[*].price`,
   `items[-1]`, `items[1:3]`, `..id` (any depth), `["a-b"]`, and filters such as
   `items[?(@.price > 10 && @.status == "open")]`. Copied paths can be pasted back in.
+  As you type it suggests what can come next from the document itself: the keys at that point,
+  `[*]` / `[0]` / `[-1]` for arrays and the keys of their items, and matching keys further down,
+  so `price` typed at the top offers `data.orders[*].items[*].price` and `..price`. `↑` `↓` choose,
+  `Tab` or `Enter` take one, `Esc` closes the list. A path that finds nothing from the top is
+  looked for at any depth instead (`address.city` finds `data.customer.address.city`), and the
+  status says so.
 - **Table** shows an array of objects (by default the first one in the body, or the selected
   one) with a column per key; click a header to sort, a `{…}` or `[…]` cell to open it.
 - **Raw** is the pretty-printed text. Copy all and Download save the JSON.
