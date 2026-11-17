@@ -2,6 +2,7 @@ import { correlate, type CorrItem, type Correlation } from '../shared/correlate'
 import type { HubEvent, HubStatus, Level, ServerMessage, SessionInfo } from '../shared/types';
 import { CHROME_LAUNCH_EVENT, chromeButton, chromeLaunching, chromeLaunchNote, startChrome } from './chrome';
 import { $, fmtBytes, h, type Child } from './dom';
+import { createFinder } from './find';
 import { bodyLang, highlight, paint, type Lang, type Token } from './highlight';
 import { initSettings, openSettings, settingsOpen, updateSettingsStatus } from './settings';
 import { initTitlebar } from './titlebar';
@@ -626,6 +627,17 @@ function renderOrder(): void {
 
 const detail = $('detail');
 let relatedHost: HTMLElement | null = null;
+/** Builds the selected event's Raw event block if it has not been opened yet (for the find bar). */
+let fillRaw: (() => void) | null = null;
+
+// The find bar is built once and stays in the panel across events, keeping its query (like a
+// browser's find bar) and its focus while live updates rebuild the content around it.
+const finder = createFinder({
+  roots: () => (state.selected ? [...detail.children].filter((el): el is HTMLElement => el !== finder.bar && el instanceof HTMLElement) : []),
+  prepare: () => fillRaw?.(),
+  fallbackFocus: () => viewport,
+});
+let detailShown: Row | null = null;
 
 function section(title: string, body: Node, opts: { note?: string; copy?: string } = {}): HTMLElement {
   const head = h('div', { class: 'sec-head' }, h('h4', {}, title), opts.note ? h('span', { class: 'note' }, opts.note) : null);
@@ -786,8 +798,12 @@ function refreshRelated(): void {
 function renderDetail(): void {
   const row = state.selected;
   relatedHost = null;
+  fillRaw = null;
+  const newEvent = row !== detailShown;
+  detailShown = row;
   if (!row) {
     detail.hidden = true;
+    finder.refresh(true);
     if (state.relatedKeys.size) {
       state.relatedKeys = new Set();
       renderList();
@@ -871,13 +887,20 @@ function renderDetail(): void {
   }
 
   const raw = h('details', { class: 'raw' }, h('summary', {}, 'Raw event'));
-  raw.addEventListener('toggle', () => {
+  fillRaw = () => {
     if (raw.childElementCount === 1) raw.append(code(JSON.stringify(res && res !== row.ev ? [row.ev, res] : row.ev, null, 2), 'json'));
-  });
+  };
+  raw.addEventListener('toggle', fillRaw);
   body.append(raw);
 
-  detail.replaceChildren(head, title, body);
+  // Everything but the find bar is replaced, so typing in it is not interrupted.
+  for (const el of [...detail.children]) if (el !== finder.bar) el.remove();
+  detail.prepend(head, title);
+  // Re-inserting the bar, even in place, would take focus from it.
+  if (finder.bar.parentElement !== detail) detail.append(finder.bar);
+  detail.append(body);
   refreshRelated();
+  finder.refresh(newEvent);
 }
 
 // ── Top bar ─────────────────────────────────────────────
@@ -1173,6 +1196,7 @@ function init(): void {
   document.addEventListener('keydown', (e) => {
     // The settings and Tomcat screens have their own keys.
     if (settingsOpen() || tomcatOpen()) return;
+    if (finder.handleKey(e)) return;
     const target = e.target as HTMLElement;
     const typing = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT';
     if (e.key === 'Escape') {

@@ -54,7 +54,10 @@ const PAINT_CHUNK = 2_000;
  */
 export function paint(el: HTMLElement, tokens: Token[]): HTMLElement {
   el.replaceChildren(spans(tokens, 0, PAINT_CHUNK));
+  delete el.dataset.painting;
   if (tokens.length <= PAINT_CHUNK) return el;
+  // Marks the element until the plain tail is gone, so the find bar can tell (see find.ts).
+  el.dataset.painting = '';
   let rest = '';
   for (let i = PAINT_CHUNK; i < tokens.length; i++) rest += tokens[i].text;
   const plain = document.createTextNode(rest);
@@ -69,7 +72,10 @@ export function paint(el: HTMLElement, tokens: Token[]): HTMLElement {
     plain.deleteData(0, len);
     from = to;
     if (from < tokens.length) later(step);
-    else plain.remove();
+    else {
+      plain.remove();
+      delete el.dataset.painting;
+    }
   };
   later(step);
   return el;

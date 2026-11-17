@@ -164,9 +164,16 @@ into the error above them.
   such).
 - Click the Time column header (or press `O`) to show the newest events at the top instead
   of the bottom. Follow then keeps the top of the list in view. The choice is remembered.
+- The find bar at the top of the detail panel searches the selected event: its title, facts,
+  related events, headers, request and response bodies (all of a large body, not only the part
+  on screen) and the raw event JSON. Press `Ctrl+F` (`Cmd+F` on a Mac) to jump to it; `Enter`
+  / `Shift+Enter` or `F3` / `Shift+F3` move between matches, which are highlighted, and `Esc`
+  clears it. `Aa` makes it case-sensitive and `.*` takes a regular expression. The query stays
+  when you select another event, so you can step through events looking for the same text.
 - The session menu switches between the live session and saved ones.
 - Shortcuts: `/` search, `M` marker, `J`/`K` or arrows to move, `E` errors only, `F` follow,
-  `O` newest/oldest first, `R` reset filters, `Esc` close, `?` help.
+  `O` newest/oldest first, `R` reset filters, `Ctrl+F` find in the selected event, `Esc`
+  close, `?` help.
 
 ## Tomcat page and WAR deploys
 
