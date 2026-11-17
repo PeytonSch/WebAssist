@@ -33,10 +33,11 @@ export interface WarWatchOptions {
 const MAX_DIRS = 500;
 
 /**
- * The WARs a watch entry covers. An entry is a folder (its *.war files), a WAR file, or a
- * pattern with * in any part, e.g. C:/dev/* /target or C:/dev/shop/target/shop-*.war.
+ * The folders and files a watch entry names: a folder, a file, or a pattern with * in any part,
+ * e.g. C:/dev/* /target or C:/dev/shop/target/shop-*.war. Every part but the last must be a
+ * folder; the last may also be a file. Also used to find the projects the WARs are built from.
  */
-export async function findWars(pattern: string): Promise<{ files: string[]; problem: string | null }> {
+export async function expandWatchPattern(pattern: string): Promise<{ paths: string[]; problem: string | null }> {
   const { root } = parse(pattern);
   const parts = pattern.slice(root.length).split(/[\\/]+/).filter(Boolean);
   let paths = [root || '.'];
@@ -57,7 +58,7 @@ export async function findWars(pattern: string): Promise<{ files: string[]; prob
         continue;
       }
       for (const n of names) if (re.test(n) && !n.startsWith('.')) next.push(join(base, n));
-      if ((dirsSeen += 1) > MAX_DIRS) return { files: [], problem: `Too many folders match ${pattern}` };
+      if ((dirsSeen += 1) > MAX_DIRS) return { paths: [], problem: `Too many folders match ${pattern}` };
     }
     // Keep only folders until the last part, which may also be a file.
     paths = [];
@@ -67,9 +68,16 @@ export async function findWars(pattern: string): Promise<{ files: string[]; prob
     }
     if (!paths.length) {
       const wild = parts.slice(0, i + 1).some((p) => p.includes('*'));
-      return { files: [], problem: wild ? `Nothing matches ${pattern}` : `Folder not found: ${root}${parts.slice(0, i + 1).join('/')}` };
+      return { paths: [], problem: wild ? `Nothing matches ${pattern}` : `Folder not found: ${root}${parts.slice(0, i + 1).join('/')}` };
     }
   }
+  return { paths, problem: null };
+}
+
+/** The WARs a watch entry covers: the *.war files in the folders it names, or the WAR files themselves. */
+export async function findWars(pattern: string): Promise<{ files: string[]; problem: string | null }> {
+  const { paths, problem } = await expandWatchPattern(pattern);
+  if (problem) return { files: [], problem };
   const files: string[] = [];
   for (const p of paths) {
     const st = await fs.stat(p).catch(() => null);

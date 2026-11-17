@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, resolve } from 'node:path';
+import { checkTemplate, DEFAULT_TERMINAL, type EditorKind } from './source/editor';
 
 export interface Config {
   /** UI and API port. Always bound to 127.0.0.1. */
@@ -85,6 +86,23 @@ export interface Config {
   };
   /** The API client screen: specs to load and how requests are sent. */
   api: ApiClientConfig;
+  /** "Go to source": the editor that opens Java classes named in logs, and where sources are. */
+  editor: EditorConfig;
+}
+
+export interface EditorConfig {
+  /** Empty: Go to source is off. */
+  kind: EditorKind;
+  /** The editor's program. Empty: found on PATH or where it is usually installed. */
+  program: string;
+  /** Neovim: open files in a running nvim (found by its RPC address) instead of a new window. */
+  nvimReuse: boolean;
+  /** Neovim: the command that opens a terminal window; {cmd} is nvim +<line> <file>. */
+  terminal: string;
+  /** Custom editor: a command line with {file} {line} {column} {dir}. Run without a shell. */
+  custom: string;
+  /** Project folders to index besides those found above the WAR watch folders. */
+  sourceDirs: string[];
 }
 
 export interface ApiClientConfig {
@@ -159,7 +177,17 @@ export const DEFAULT_CONFIG: Config = {
     timeoutMs: 30_000,
     addRequestId: true,
   },
+  editor: {
+    kind: '',
+    program: '',
+    nvimReuse: true,
+    terminal: DEFAULT_TERMINAL,
+    custom: '',
+    sourceDirs: [],
+  },
 };
+
+export const EDITOR_KINDS: EditorKind[] = ['', 'vscode', 'idea', 'emacs', 'nvim', 'custom'];
 
 const isObj = (v: unknown): v is Record<string, any> => !!v && typeof v === 'object' && !Array.isArray(v);
 
@@ -224,6 +252,10 @@ export function resolvePaths(config: Config, base: string): Config {
   config.tomcat.javaHome = opt(config.tomcat.javaHome);
   config.tomcat.startCommands = config.tomcat.startCommands.map((c) => ({ ...c, cwd: abs(c.cwd || '.') }));
   config.postgres.logs = config.postgres.logs.map(abs);
+  // A program given by name ("nvim") is looked up on PATH; only a path is made absolute.
+  const program = config.editor.program;
+  if (program && /[\\/]/.test(program) && !isAbsolute(program) && !/^[a-zA-Z]:/.test(program)) config.editor.program = abs(program);
+  config.editor.sourceDirs = config.editor.sourceDirs.map(abs);
   // Spec files, not URLs, are relative to the settings file like every other path.
   // A hand-edited file is not validated on load, so skip entries that are not { name, url }.
   const specs: unknown[] = Array.isArray(config.api?.specs) ? config.api.specs : [];
@@ -402,6 +434,27 @@ export function validateConfig(input: unknown): { config: Config; errors: FieldE
   });
 
   config.api = apiClient(config.api);
+
+  const ed = isObj(config.editor) ? config.editor : structuredClone(DEFAULT_CONFIG.editor);
+  if (!EDITOR_KINDS.includes(ed.kind)) errors.push({ path: 'editor.kind', message: 'Choose an editor from the list' });
+  const template = (path: string, v: unknown, label: string, required: string[]) => {
+    const t = optText(path, v, label);
+    const problem = checkTemplate(t, required);
+    if (problem) errors.push({ path, message: problem });
+    return t;
+  };
+  config.editor = {
+    kind: EDITOR_KINDS.includes(ed.kind) ? ed.kind : '',
+    program: optText('editor.program', ed.program, 'Program').replace(/^"(.*)"$/, '$1'),
+    nvimReuse: bool('editor.nvimReuse', ed.nvimReuse ?? true),
+    terminal: template('editor.terminal', ed.terminal ?? DEFAULT_CONFIG.editor.terminal, 'Terminal command', []),
+    custom: template('editor.custom', ed.custom, 'Command', ed.kind === 'custom' ? ['file'] : []),
+    sourceDirs: list('editor.sourceDirs', ed.sourceDirs ?? []),
+  };
+  if (config.editor.terminal && !/\{(cmd|file)\}/.test(config.editor.terminal) && !errors.some((e) => e.path === 'editor.terminal')) {
+    errors.push({ path: 'editor.terminal', message: 'Must contain {cmd}, or {file} and {line}' });
+  }
+  if (config.editor.kind === 'custom' && !config.editor.custom) errors.push({ path: 'editor.custom', message: 'Enter the command that opens a file' });
 
   /** The API client's settings. Error paths name the row, e.g. api.specs.1.url. */
   function apiClient(v: unknown): ApiClientConfig {

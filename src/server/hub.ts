@@ -8,6 +8,7 @@ import { folderSource } from './collectors/logsdir';
 import type { TailSource } from './collectors/tail';
 import type { Config } from './config';
 import { makeEvent } from './normalize';
+import { SourceService } from './source/service';
 import { SessionStore } from './store';
 import { Webapps } from './webapps';
 import { TomcatService } from './tomcat/service';
@@ -31,6 +32,8 @@ export class Hub {
   tomcat: TomcatService;
   /** The API screen's spec loading and request sending. */
   api: ApiClient;
+  /** Go to source: the source index and the editor. */
+  source: SourceService;
 
   constructor(public cfg: Config) {
     this.store = new SessionStore(cfg.sessionsDir);
@@ -40,6 +43,7 @@ export class Hub {
       onWar: (war) => this.listeners.forEach((l) => l.onWar?.(war)),
     });
     this.api = new ApiClient(cfg, (ev) => this.emit(ev));
+    this.source = new SourceService(cfg);
   }
 
   private build(): void {
@@ -88,10 +92,12 @@ export class Hub {
     this.webapps?.start();
     this.logs.forEach((l) => l.start());
     this.tomcat.start();
+    this.source.start();
   }
 
   async stop(): Promise<void> {
     this.started = false;
+    this.source.stop();
     await this.tomcat.stop();
     await this.stopCollectors();
     await this.store.close();
@@ -116,6 +122,7 @@ export class Hub {
     this.build();
     this.tomcat.reconfigure(this.cfg);
     this.api.reconfigure(this.cfg);
+    this.source.reconfigure(this.cfg);
     if (this.started) {
       this.chrome?.start();
       this.webapps?.start();

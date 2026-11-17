@@ -34,6 +34,11 @@ const HEADLESS_START = new RegExp(
   `^(?:\\d+ +(?=\\[))?(?:\\[[^\\]\\s]{1,80}\\] +)?(?:\\[\\s*(?:${LEVEL_WORDS})\\s*\\]|(?:${LEVEL_WORDS})(:)?)(?=\\s|$)`,
 );
 const STACK_FRAME = /^\s+at\s/;
+/**
+ * The logger at the start of a message: a class name (com.x.OrderService, Logback's shortened
+ * c.x.OrderService), or JUL's class and method (com.x.OrderService.load), as layouts print it.
+ */
+const LOGGER = /^((?:[a-z_$][\w$]*\.)+[A-Z][\w$]*(?:\.[a-z_$<][\w$<>]*)?)(?=\s|:|$)/;
 const EXCEPTION = /^\s*(?:Caused by:\s*)?((?:[\w$]+\.)+[\w$]*(?:Exception|Error|Throwable|Failure))\b(?::\s*(.*))?/;
 
 interface Head {
@@ -161,6 +166,7 @@ export function parseTomcatEntry(lines: string[], ctx: ParseContext): EventInput
       file: ctx.file,
       message: text,
       thread,
+      logger: LOGGER.exec(head.rest)?.[1] ?? null,
       exception,
       rootCause,
       stackFrames,

@@ -10,6 +10,7 @@ import { chromeSetup, startChrome } from './chrome-launch';
 import { matchPattern } from './collectors/tail';
 import { editableConfig, resolvePaths, saveConfig, validateConfig } from './config';
 import type { Hub } from './hub';
+import { sourceRoute } from './source/routes';
 import { tomcatRoute } from './tomcat/routes';
 
 export interface ServerOptions {
@@ -160,6 +161,7 @@ export function startServer(hub: Hub, uiDir: string, opts: ServerOptions): Promi
       }
 
       if (await tomcatRoute(hub.tomcat, req, res, path, json, readBody)) return;
+      if (await sourceRoute(hub.source, req, res, path, json, readBody)) return;
       if (await apiClientRoute(() => hub.cfg, hub.api, catalog, req, res, path, json, readBody)) return;
 
       if (path.startsWith('/api/')) return json(res, 404, { error: 'Not found' });
