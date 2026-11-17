@@ -331,7 +331,14 @@ function write(node: JNode, pad: string, indent: number, out: Writer): void {
 }
 
 /** Whether tableOf would give a table, without building it. */
+/** Whether `node` can be shown as a table: any non-empty array, or a map of similar records. */
 export function canTable(node: JNode): boolean {
+  if (node.t === 'arr') return node.items.length > 0;
+  return node.t === 'obj' && isRecordMap(node);
+}
+
+/** A table of records: an array holding objects, or a map of records. Opens as a table by itself. */
+export function isRecordTable(node: JNode): boolean {
   if (node.t === 'arr') return node.items.some((v) => v.t === 'obj');
   return node.t === 'obj' && isRecordMap(node);
 }
@@ -834,36 +841,103 @@ export interface Table {
   /** Columns left out past the cap. */
   hiddenColumns: number;
   rows: { seg: Seg; node: JNode }[];
-  /** Some rows are not objects; they get a "value" column. */
+  /** Rows that are arrays get a column per position: [0], [1]… This many. */
+  indexColumns: number;
+  /** Some rows are plain values (or arrays past the index columns); they get a "value" column. */
   valueColumn: boolean;
 }
 
 /**
  * Rows and columns for an array (rows by index) or an object whose values are all objects
- * (rows by key, e.g. a map of IDs to records). Null unless at least one row is an object.
+ * (rows by key, e.g. a map of IDs to records). Object rows give a column per key, array rows a
+ * column per position (tuples, CSV-like data), and plain values a single value column. Null for
+ * an empty array and for objects that are not maps of records.
  */
 export function tableOf(node: JNode, maxColumns = 100): Table | null {
   let rows: Table['rows'];
-  if (node.t === 'arr') rows = node.items.map((v, i) => ({ seg: i, node: v }));
+  if (node.t === 'arr' && node.items.length) rows = node.items.map((v, i) => ({ seg: i, node: v }));
   else if (node.t === 'obj' && isRecordMap(node)) rows = node.keys.map((k, i) => ({ seg: k, node: node.vals[i] }));
   else return null;
   const seen = new Set<string>();
   const columns: string[] = [];
+  let widest = 0;
   let valueColumn = false;
   for (const r of rows) {
-    if (r.node.t !== 'obj') {
-      valueColumn = true;
-      continue;
-    }
-    for (const k of r.node.keys) {
-      if (!seen.has(k)) {
-        seen.add(k);
-        columns.push(k);
+    const n = r.node;
+    if (n.t === 'obj') {
+      for (const k of n.keys) {
+        if (!seen.has(k)) {
+          seen.add(k);
+          columns.push(k);
+        }
       }
-    }
+    } else if (n.t === 'arr') widest = Math.max(widest, n.items.length);
+    else valueColumn = true;
   }
-  if (!seen.size && !rows.some((r) => r.node.t === 'obj')) return null;
-  return { columns: columns.slice(0, maxColumns), hiddenColumns: Math.max(0, columns.length - maxColumns), rows, valueColumn };
+  const keyColumns = Math.min(columns.length, maxColumns);
+  const indexColumns = Math.min(widest, Math.max(0, maxColumns - keyColumns));
+  // Arrays longer than the index columns still show whole in the value column.
+  if (rows.some((r) => r.node.t === 'arr' && r.node.items.length > indexColumns)) valueColumn = true;
+  // Rows of empty objects or arrays would otherwise have no column at all.
+  if (!keyColumns && !indexColumns) valueColumn = true;
+  return {
+    columns: columns.slice(0, keyColumns),
+    hiddenColumns: columns.length - keyColumns + (widest - indexColumns),
+    rows,
+    indexColumns,
+    valueColumn,
+  };
+}
+
+/** Any object as a table of its keys and values: one row per key, a single value column. */
+export function keyValueTable(node: JObj): Table {
+  return { columns: [], hiddenColumns: 0, rows: node.keys.map((k, i) => ({ seg: k, node: node.vals[i] })), indexColumns: 0, valueColumn: true };
+}
+
+/** A row's value at an index column ([0], [1]…), when the row is an array. */
+export function cellAt(row: JNode, index: number): JNode | undefined {
+  return row.t === 'arr' ? row.items[index] : undefined;
+}
+
+/**
+ * A container on one line, nested values included as far as `max` allows, for table cells:
+ * {city: "London", postCode: "NW1"}, (2) [{sku: "S-1", price: 9.99}, {sku: "T-1", …}]. An array's
+ * length comes first, so a cell cut short still says how many there are.
+ * Unlike preview(), it looks inside nested objects and arrays, so a cell says what is in it.
+ */
+export function inlinePreview(node: JNode, max = 160): string {
+  const out = { text: '' };
+  const fits = () => out.text.length < max;
+  const write = (n: JNode, depth: number): void => {
+    if (!isContainer(n)) {
+      out.text += n.t === 'str' ? JSON.stringify(n.v.length > 40 ? `${n.v.slice(0, 40)}…` : n.v) : preview(n);
+      return;
+    }
+    const size = sizeOf(n);
+    const [open, close] = n.t === 'obj' ? ['{', '}'] : ['[', ']'];
+    if (!size) {
+      out.text += open + close;
+      return;
+    }
+    if (depth > 3) {
+      out.text += n.t === 'obj' ? `{${size} key${size === 1 ? '' : 's'}}` : `[${size}]`;
+      return;
+    }
+    out.text += open;
+    for (let k = 0; k < size; k++) {
+      if (!fits()) {
+        out.text += '…';
+        break;
+      }
+      if (k) out.text += ', ';
+      if (n.t === 'obj') out.text += `${keyText(n.keys[k])}: `;
+      write(n.t === 'obj' ? n.vals[k] : n.items[k], depth + 1);
+    }
+    out.text += close;
+  };
+  write(node, 0);
+  const text = out.text.length > max ? `${out.text.slice(0, max - 1)}…` : out.text;
+  return node.t === 'arr' && node.items.length ? `(${node.items.length.toLocaleString('en-US')}) ${text}` : text;
 }
 
 /**

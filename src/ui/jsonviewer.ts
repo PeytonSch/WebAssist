@@ -13,9 +13,9 @@ import { $, fmtBytes, h, type Child } from './dom';
 import { highlight, paint } from './highlight';
 import { completions, nestedFallback, type Suggestion } from './jsoncomplete';
 import {
-  canTable, cellOf, compareNodes, describe, findTable, isContainer, jsonPath, jsPath, lossyNumber, parseJson, plural, preview,
+  canTable, cellAt, cellOf, compareNodes, inlinePreview, isRecordTable, keyValueTable, describe, findTable, isContainer, jsonPath, jsPath, lossyNumber, parseJson, plural, preview,
   QueryError, runQuery, search, sizeOf, stringify, stringifyCapped, tableOf, walk,
-  type JContainer, type JNode, type Match, type ParseResult, type Seg, type Table,
+  type JArr, type JContainer, type JNode, type Match, type ParseResult, type Seg, type Table,
 } from './jsonmodel';
 
 export interface JsonSource {
@@ -667,7 +667,7 @@ function drill(path: Seg[]): void {
   U.query.value = expr;
   applyQuery(expr);
   const d = doc();
-  setMode(d.tops.length === 1 && canTable(d.tops[0].node) ? 'table' : 'tree');
+  setMode(d.tops.length === 1 && isRecordTable(d.tops[0].node) ? 'table' : 'tree');
 }
 
 // ── Table ───────────────────────────────────────────────
@@ -676,17 +676,38 @@ function drill(path: Seg[]): void {
 function tableTarget(): { node: JNode; path: Seg[]; rowPaths: Seg[][] | null } | null {
   const d = doc();
   if (d.table) return { ...d.table, rowPaths: null };
-  if (d.sel && canTable(d.sel.node)) return { ...d.sel, rowPaths: null };
+  // A query selects its first result by itself; only a value the user picked overrides the
+  // results (otherwise orders[*].items would show just the first order's items).
+  const picked = d.sel && !(d.tops[0] && d.sel.node === d.tops[0].node);
+  if (picked && canTable(d.sel!.node)) return { ...d.sel!, rowPaths: null };
   if (d.tops.length > 1) {
-    // Several query results (items[*]) make one row each.
+    // Several arrays (orders[*].items): their items, together, one row each.
+    if (d.tops.every((t) => t.node.t === 'arr')) {
+      const items: JNode[] = [];
+      const rowPaths: Seg[][] = [];
+      for (const t of d.tops) {
+        (t.node as JArr).items.forEach((item, i) => {
+          if (items.length >= MAX_TABLE_ROWS) return;
+          items.push(item);
+          rowPaths.push([...t.path, i]);
+        });
+      }
+      if (items.length) return { node: { t: 'arr', items }, path: [], rowPaths };
+    }
+    // Other results (items[*], items[*].price): one row each.
     return { node: { t: 'arr', items: d.tops.map((t) => t.node) }, path: [], rowPaths: d.tops.map((t) => t.path) };
   }
   const top = d.tops[0];
   if (!top) return null;
   if (canTable(top.node)) return { node: top.node, path: top.path, rowPaths: null };
   const found = findTable(top.node);
-  return found ? { node: found.node, path: [...top.path, ...found.path], rowPaths: null } : null;
+  if (found) return { node: found.node, path: [...top.path, ...found.path], rowPaths: null };
+  // An object with no list in it: its keys and values.
+  return top.node.t === 'obj' && top.node.keys.length ? { node: top.node, path: top.path, rowPaths: null } : null;
 }
+
+/** Rows the table takes from several arrays put together; past this, the rest is left out. */
+const MAX_TABLE_ROWS = 100_000;
 
 function cellText(n: JNode | undefined): string {
   if (!n) return '';
@@ -696,28 +717,34 @@ function cellText(n: JNode | undefined): string {
     case 'bool': return String(n.v);
     case 'null': return 'null';
     case 'obj':
-    case 'arr': return chipLabel(n);
+    case 'arr': return inlinePreview(n);
   }
 }
-
-const chipLabel = (n: JContainer) => (n.t === 'obj' ? `{${countLabel(n)}}` : `[${countLabel(n)}]`);
 
 function renderTable(): HTMLElement {
   const d = doc();
   const target = tableTarget();
-  const t = target && tableOf(target.node);
+  const t = target && (tableOf(target.node) ?? (target.node.t === 'obj' ? keyValueTable(target.node) : null));
   if (!target || !t) {
     V.table = null;
     return h('div', { class: 'jv-empty' },
-      h('strong', {}, 'No array of objects here.'),
-      h('div', {}, 'Select an array in the tree and choose Table, or put its path in the query box, e.g. data.items.'));
+      h('strong', {}, 'Nothing to show as a table here.'),
+      h('div', {}, 'Tables show arrays and objects. Select one in the tree and choose Table, or put its path in the Path box, e.g. data.items.'));
   }
   // Columns: the row label, each key, and a value column for rows that are not objects.
   const cols: { id: string; label: string; cell: (row: JNode) => JNode | undefined }[] = [
     { id: '#', label: target.rowPaths ? 'path' : target.node.t === 'obj' ? 'key' : '#', cell: () => undefined },
     ...t.columns.map((c) => ({ id: `k:${c}`, label: c, cell: (row: JNode) => cellOf(row, c) })),
+    ...Array.from({ length: t.indexColumns }, (_, i) => ({ id: `i:${i}`, label: `[${i}]`, cell: (row: JNode) => cellAt(row, i) })),
   ];
-  if (t.valueColumn) cols.push({ id: '=', label: '(value)', cell: (row: JNode) => (row.t === 'obj' ? undefined : row) });
+  // Plain values, and arrays too long for the index columns, show whole here.
+  if (t.valueColumn) {
+    // A row already spread over key or index columns is not repeated here.
+    const spread = (row: JNode) => (row.t === 'obj' ? t.columns.length > 0 : row.t === 'arr' && t.indexColumns > 0 && row.items.length <= t.indexColumns);
+    cols.push({ id: '=', label: '(value)', cell: (row: JNode) => (spread(row) ? undefined : row) });
+  }
+  /** The path of a cell under its row: the key, the [index], or the row itself. */
+  const cellSeg = (id: string): Seg | null => (id.startsWith('k:') ? id.slice(2) : id.startsWith('i:') ? Number(id.slice(2)) : null);
   const labelOf = (k: number): string => (target.rowPaths ? jsPath(target.rowPaths[k]) || '$' : String(t.rows[k].seg));
 
   const order = t.rows.map((_, k) => k);
@@ -742,8 +769,14 @@ function renderTable(): HTMLElement {
   const sample = order.slice(0, 300);
   const widths = cols.map((c, ci) => {
     let len = c.label.length + 2;
-    for (const k of sample) len = Math.max(len, (ci === 0 ? labelOf(k) : cellText(c.cell(t.rows[k].node))).length);
-    return Math.round(Math.min(Math.max(len, 3), 42) * 7.3 + 22);
+    let nested = false;
+    for (const k of sample) {
+      const n = ci === 0 ? undefined : c.cell(t.rows[k].node);
+      nested ||= !!n && isContainer(n);
+      len = Math.max(len, (ci === 0 ? labelOf(k) : cellText(n)).length);
+    }
+    // Columns of nested values get more room, so their previews say something.
+    return Math.round(Math.min(Math.max(len, 3), nested ? 64 : 42) * 7.3 + 22);
   });
   const total = widths.reduce((a, b) => a + b, 0);
 
@@ -775,9 +808,13 @@ function renderTable(): HTMLElement {
       } else {
         const n = c.cell(row);
         if (n && isContainer(n)) {
-          const path = c.id === '=' ? rowPathOf(k) : [...rowPathOf(k), c.label];
-          const chip = button(chipLabel(n), `Open ${jsPath(path) || '$'}`, () => drill(path), 'jv-chip');
-          td.append(chip);
+          const seg = cellSeg(c.id);
+          const path = seg === null ? rowPathOf(k) : [...rowPathOf(k), seg];
+          // What is inside, on one line; the whole value (pretty-printed) on hover; a click opens it.
+          const pretty = stringifyCapped(n, 2, 1500);
+          const open = button(inlinePreview(n), `${jsPath(path) || '$'} (click to open)\n\n${pretty.text}${pretty.cut ? '\n…' : ''}`, () => drill(path), 'jv-cellpreview');
+          td.classList.add('nested');
+          td.append(open);
         } else if (n) {
           td.classList.add(`jv-${n.t}`);
           td.append(...marked(cellText(n)));
@@ -791,11 +828,11 @@ function renderTable(): HTMLElement {
   }, head);
   list.el.addEventListener('click', (e) => {
     const tr = (e.target as HTMLElement).closest<HTMLElement>('.jv-tr');
-    if (tr && !(e.target as HTMLElement).closest('.jv-chip')) selectTableRow(Number(tr.dataset.i), list);
+    if (tr && !(e.target as HTMLElement).closest('.jv-cellpreview')) selectTableRow(Number(tr.dataset.i), list);
   });
   list.el.addEventListener('dblclick', (e) => {
     const tr = (e.target as HTMLElement).closest<HTMLElement>('.jv-tr');
-    if (tr && !(e.target as HTMLElement).closest('.jv-chip')) drill(rowPathOf(order[Number(tr.dataset.i)]));
+    if (tr && !(e.target as HTMLElement).closest('.jv-cellpreview')) drill(rowPathOf(order[Number(tr.dataset.i)]));
   });
   list.el.addEventListener('keydown', (e) => {
     const page = list.pageRows();
@@ -808,7 +845,7 @@ function renderTable(): HTMLElement {
     e.preventDefault();
   });
 
-  const where = target.rowPaths ? `${plural(target.rowPaths.length, 'result')} of ${d.query}` : jsPath(target.path) || '$';
+  const where = target.rowPaths ? `${plural(target.rowPaths.length, target.rowPaths.some((p) => p.length) && d.tops.length !== target.rowPaths.length ? 'item' : 'result')} of ${d.query}` : jsPath(target.path) || '$';
   const info = h('div', { class: 'jv-tinfo' },
     h('code', {}, where), ' · ', plural(t.rows.length, 'row'), ' · ', plural(cols.length - 1, 'column'),
     t.hiddenColumns ? h('span', { class: 'muted' }, ` (${t.hiddenColumns} more not shown)`) : null,

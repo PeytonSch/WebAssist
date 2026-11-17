@@ -1825,6 +1825,22 @@ mark.jv-mark { background: var(--jv-match); color: inherit; border-radius: 2px; 
   cursor: pointer;
 }
 .jv-chip:hover { border-color: var(--accent); color: var(--accent); }
+/* A nested object or array in a table cell: what is inside, on one line; click to open it. */
+.jv-td.nested { display: block; }
+.jv-cellpreview {
+  max-width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text-2);
+  font: 12px var(--mono);
+  text-align: left;
+  white-space: pre;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+.jv-cellpreview:hover { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
 
 pre.code.jv-raw { flex: 1; min-height: 0; max-height: none; margin: 0; border: 0; border-radius: 0; padding: 12px 20px; background: var(--surface); outline: none; }
 .jv-errmark { background: var(--error); color: #fff; border-radius: 2px; padding: 0 1px; }
