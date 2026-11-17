@@ -500,7 +500,9 @@ export function terminalStep(template: string, nvim: string, t: Target, m: Edito
       'Pick the terminal you use under Settings › Source code, or give its full path in the command.',
     );
   }
-  return makeStep(program, args.slice(1), false, m);
+  // Windows Terminal reads ";" in its arguments as "and then open another tab"; \; is a literal one.
+  const rest = /^wt(\.exe)?$/i.test(program.split(/[\\/]/).pop() ?? '') ? args.slice(1).map((a) => a.replace(/;/g, '\\;')) : args.slice(1);
+  return makeStep(program, rest, false, m);
 }
 
 // ── Neovim ──────────────────────────────────────────────

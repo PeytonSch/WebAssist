@@ -122,6 +122,13 @@ describe('Neovim', () => {
     expect(step).toMatchObject({ file: 'C:\\Program Files\\WezTerm\\wezterm.exe', args: ['start', '--cwd', target.dir, '--', 'C:\\nvim\\nvim.exe', '+87', target.file], verbatim: false, helper: false });
     expect(() => terminalStep('kitty {cmd}', 'nvim', target, m)).toThrow(/kitty was not found/);
   });
+
+  it('escapes ; for Windows Terminal, which would read it as a new tab', () => {
+    const m = machine('win32', { env: { PATH: 'C:\\Windows' }, files: ['C:\\Windows\\wt.exe'] });
+    const t = { ...target, file: 'C:\\dev\\a;b\\Foo.java', dir: 'C:\\dev\\a;b' };
+    const step = terminalStep('wt -d {dir} {cmd}', 'nvim', t, m);
+    expect(step.args).toEqual(['-d', 'C:\\dev\\a\\;b', 'nvim', '+87', 'C:\\dev\\a\\;b\\Foo.java']);
+  });
 });
 
 describe('finding and starting editors', () => {
