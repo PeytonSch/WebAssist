@@ -107,6 +107,12 @@ written with forward slashes or pasted as they are (`C:\Users\me\logs`).
 | `api.timeoutMs` | `30000` | How long an API request may take. |
 | `api.addRequestId` | `true` | Send `correlation.header` with a fresh ID on API requests, unless the request sets it. |
 | `api.insecureTls` | `false` | Accept self-signed and otherwise untrusted https certificates on API requests. |
+| `editor.kind` | (empty) | Go to source: `vscode`, `idea`, `emacs`, `nvim` or `custom`. Empty: off. |
+| `editor.program` | (empty) | The editor's program. Empty: found on `PATH` and in the usual install places. |
+| `editor.nvimReuse` | `true` | Neovim: open files in a running nvim instead of a new window. |
+| `editor.terminal` | `wezterm start --cwd {dir} -- {cmd}` | Neovim: the command that opens a terminal window running `{cmd}`. |
+| `editor.custom` | (empty) | Custom editor: a command with `{file}` `{line}` `{column}` `{dir}`. |
+| `editor.sourceDirs` | `[]` | Project folders to index besides those found above `tomcat.warWatch`. |
 
 ## Collectors
 
@@ -187,7 +193,51 @@ into the error above them.
 - The session menu switches between the live session and saved ones.
 - Shortcuts: `/` search, `M` marker, `J`/`K` or arrows to move, `E` errors only, `F` follow,
   `O` newest/oldest first, `R` reset filters, `Ctrl+F` find in the selected event, `V` JSON
-  viewer, `Esc` close, `?` help.
+  viewer, `G` go to source, `Esc` close, `?` help.
+
+### Go to source
+
+Java classes in Tomcat log entries open in your editor at the line: stack frames from your own
+code, the logger (shown under Log entry) and exception classes become links (underlined on
+hover, with a small ↗). Click one, or focus it with `Tab` and press `Enter`. **Go to source**
+under the log entry (or `G`) opens the top frame from your code, else the logger's class. Library
+frames stay plain. When two projects or modules define the same class, the one whose WAR the
+event's webapp was deployed from is used; otherwise a dialog asks which.
+
+Set it up under Settings → Source code:
+
+- **Editor**: VS Code, IntelliJ IDEA, Emacs (through `emacsclient`, so the Emacs server must be
+  running: `M-x server-start`), Neovim, or a custom command. The program is found on `PATH` and
+  in the usual install places (shown under the setting); give its path if it is elsewhere.
+- **Neovim**: with "Use a running nvim" on, the file opens in an nvim that is already running
+  (Neovim 0.9+ always listens on an address of its own: a named pipe on Windows, a socket in
+  `$XDG_RUNTIME_DIR` or the temp folder elsewhere), preferring one whose working folder is in the
+  project, else the most recently started; it works from insert or terminal mode too. It cannot
+  bring that terminal window to the front. Without one, nvim starts in a new terminal window:
+  pick WezTerm, Windows Terminal or another preset, or write your own command (below).
+- **Where the sources are**: each WAR build folder (`tomcat.warWatch`) leads to its project by
+  walking up to the folder with `pom.xml`, `build.gradle(.kts)` or `settings.gradle(.kts)` (the
+  outermost within four levels, stopping at a `.git` folder), so `C:/dev/*/target` covers every
+  project there. Add other projects (a shared library) under "More project folders". Every
+  `src/<set>/java`, `kotlin`, `groovy` and `scala` folder in every module is indexed in the
+  background; new and removed files are picked up within about 10 seconds. "Projects found"
+  lists what was found, with class counts.
+
+Commands (the terminal for Neovim and the custom editor) are split into arguments by spaces,
+with `"…"` or `'…'` grouping, and run without a shell, so a path is never read as shell syntax.
+Placeholders: `{file}`, `{line}`, `{column}`, `{dir}` (the project folder) and, for the terminal,
+`{cmd}` (`nvim +<line> <file>` as separate arguments). Placed inside a quoted argument that has
+spaces, i.e. a command line for another program as in `wezterm start -- nu -c "nvim +{line}
+{file}"`, a value with spaces is quoted for that program: in single quotes on macOS and Linux;
+on Windows with forward slashes in double quotes (`"C:/dev/my shop/Foo.java"`), which cmd,
+PowerShell and nushell all read the same way.
+
+On Windows, programs are started directly: VS Code as the `Code.exe` that `code.cmd` wraps (with
+`--goto file:line:column`), IntelliJ IDEA as `idea64.exe --line N file` (also the one a JetBrains
+Toolbox `idea.cmd` starts), `emacsclient.exe -n +line:column file`, `nvim.exe --server
+\\.\pipe\nvim.<pid>.0 --remote-send …`. Any other `.cmd` or `.bat` runs through `cmd.exe /d
+/v:off /s /c` with every argument quoted; a file path containing `"` or `%` is refused there.
+Only files in the index are opened: the API takes a class name, never a path.
 
 ### JSON viewer
 

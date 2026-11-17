@@ -6,8 +6,9 @@
 // selects it.
 //
 // The panel is searched block by block: each <pre> is one block (its text is split across
-// highlight spans, and a match may cross them), and any other text node is a block of its own,
-// so a match never runs from a label into its value. See findtext.ts for the matching itself.
+// highlight spans, and a match may cross them), as is an element marked data-find-block (a fact
+// whose class name is a Go to source link); any other text node is a block of its own, so a
+// match never runs from a label into its value. See findtext.ts for the matching itself.
 
 import { h } from './dom';
 import { compileQuery, countLabel, findAll, locate, MAX_MATCHES, pieceStarts, step } from './findtext';
@@ -103,7 +104,7 @@ function collectBlocks(roots: HTMLElement[]): Block[] {
       if (n.nodeType !== Node.TEXT_NODE) continue;
       const t = n as Text;
       if (t.data === '') continue;
-      const p = t.parentElement?.closest('pre') ?? null;
+      const p = t.parentElement?.closest('pre, [data-find-block]') ?? null;
       if (!p || p !== pre) flush();
       pre = p;
       cur.push(t);

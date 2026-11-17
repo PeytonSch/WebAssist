@@ -727,6 +727,23 @@ pre.code.nowrap { white-space: pre; overflow-wrap: normal; }
 .hl-info { color: var(--syn-info); font-weight: 600; }
 .hl-debug { color: var(--muted); font-weight: 600; }
 
+/* Go to source (source.ts): classes from your own sources in frames, loggers and facts. The
+   arrow is generated content, so it is not part of the text that find and copy see. */
+.src-link { cursor: pointer; border-radius: 3px; }
+.src-link:hover { text-decoration: underline; text-underline-offset: 2px; }
+.src-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; text-decoration: underline; }
+.hl-fn.src-link { color: var(--accent); }
+:is(.hl-loc, .hl-logger, .hl-exc, .fact-src).src-link::after {
+  content: "↗";
+  margin-left: 1px;
+  font-size: 0.85em;
+  font-weight: 400;
+  color: var(--accent);
+  opacity: 0.55;
+}
+.src-link:hover::after, .src-link:focus-visible::after { opacity: 1; }
+.fact-src.src-link { color: var(--accent); }
+
 .notice {
   margin-top: 6px;
   font-size: 12px;
@@ -888,6 +905,43 @@ details.raw summary {
 .keys { display: grid; grid-template-columns: auto 1fr; gap: 9px 16px; margin: 0; align-items: center; }
 .keys dt { color: var(--text-2); white-space: nowrap; }
 .keys dd { margin: 0; }
+
+/* Go to source: which file, when several define the class; and why opening failed. */
+.src-choose { width: min(560px, 92vw); }
+.src-choose-note { margin: -6px 0 10px; color: var(--text-2); font-size: 12.5px; overflow-wrap: anywhere; }
+.src-choices { display: flex; flex-direction: column; gap: 6px; max-height: 50vh; overflow-y: auto; }
+.src-choice {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-2);
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.src-choice:hover, .src-choice:focus-visible { border-color: var(--accent); background: var(--accent-soft); outline: none; }
+.src-choice code { font: 11.5px var(--mono); color: var(--text-2); overflow-wrap: anywhere; }
+.src-choice-module { color: var(--text-2); }
+.src-choice-root { color: var(--muted); font-size: 11.5px; overflow-wrap: anywhere; }
+.src-error {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 20;
+  align-items: flex-start;
+  max-width: min(540px, calc(100vw - 32px));
+  margin: 0;
+  box-shadow: 0 10px 30px rgba(16, 24, 40, 0.2);
+  background: var(--surface);
+}
+.src-error-text { flex: 1; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.src-error-text span { color: var(--text-2); }
+.src-error-text pre, .src-error-text code { margin: 0; font: 11.5px var(--mono); color: var(--text-2); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 120px; overflow: auto; }
 
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 5px; border: 2px solid var(--surface); }
@@ -1865,3 +1919,14 @@ pre.code.jv-value { max-height: none; }
   .jv-side { width: auto; max-height: 40%; border-left: 0; border-top: 1px solid var(--border); }
   .jv-depth { margin-left: 0; }
 }
+
+/* ── Settings › Source code ──────────────────────────── */
+
+.src-terminal { display: flex; gap: 6px; min-width: 0; }
+.src-terminal select { flex: 0 0 170px; }
+.src-terminal .input.mono { flex: 1; min-width: 0; }
+.field-control > .src-found { width: 100%; }
+.src-projects { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; font-size: 12px; }
+.src-project { display: flex; flex-direction: column; gap: 3px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-2); }
+.src-project-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; }
+.src-project code.path { padding: 0; border: 0; background: none; }

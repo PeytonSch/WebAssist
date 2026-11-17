@@ -128,6 +128,31 @@ describe('logs and stack traces', () => {
     expect(of(p, 'id')).toEqual(['3f2a9c1e-8b7d-4e6f-9a0b-1c2d3e4f5a6b', 'abc-123456']);
     expect(of(p, 'str')).toEqual(["'quoted'"]);
   });
+  it('names the class behind frames, loggers and exceptions, for Go to source', () => {
+    const refs = t.filter((x) => x.ref).map((x) => [x.cls, x.text, x.ref]);
+    expect(refs).toEqual([
+      ['logger', 'org.apache.catalina.core.StandardWrapperValve.invoke', { cls: 'org.apache.catalina.core.StandardWrapperValve.invoke' }],
+      ['exc', 'IllegalStateException', { cls: 'java.lang.IllegalStateException' }],
+      ['fn', 'OrderService.load', { cls: 'com.example.OrderService', file: 'OrderService.java', line: 87 }],
+      ['loc', 'OrderService.java:87', { cls: 'com.example.OrderService', file: 'OrderService.java', line: 87 }],
+      // The module prefix is not part of the class name.
+      ['fn', 'DirectMethodHandleAccessor.invoke', { cls: 'jdk.internal.reflect.DirectMethodHandleAccessor', file: 'DirectMethodHandleAccessor.java', line: 103 }],
+      ['loc', 'DirectMethodHandleAccessor.java:103', { cls: 'jdk.internal.reflect.DirectMethodHandleAccessor', file: 'DirectMethodHandleAccessor.java', line: 103 }],
+      ['exc', 'PSQLException', { cls: 'org.postgresql.util.PSQLException' }],
+      ['fn', 'QueryExecutorImpl.receiveErrorResponse', { cls: 'org.postgresql.core.v3.QueryExecutorImpl', file: 'QueryExecutorImpl.java', line: 2713 }],
+      ['loc', 'QueryExecutorImpl.java:2713', { cls: 'org.postgresql.core.v3.QueryExecutorImpl', file: 'QueryExecutorImpl.java', line: 2713 }],
+    ]);
+    const inner = highlight('\tat com.x.Foo$Bar.lambda$run$0(Foo.kt:12)\n\tat com.x.Gen.call(Unknown Source)', 'log');
+    expect(inner.filter((x) => x.ref).map((x) => x.ref)).toEqual([
+      { cls: 'com.x.Foo$Bar', file: 'Foo.kt', line: 12 },
+      { cls: 'com.x.Foo$Bar', file: 'Foo.kt', line: 12 },
+      { cls: 'com.x.Gen' },
+      { cls: 'com.x.Gen' },
+    ]);
+    // JavaScript frames name no class.
+    expect(highlight('TypeError: x\n    at render (http://localhost:4010/app.js:12:5)', 'log').some((x) => x.ref)).toBe(false);
+  });
+
   it('does not treat stack frames after a statement as SQL', () => {
     const t2 = highlight('2026-11-14 08:16:00.123 ERROR [main] c.e.Repo - bad statement: select 1\n\tat com.e.Repo.run(Repo.java:3)', 'log');
     expect(of(t2, 'fn')).toEqual(['Repo.run']);

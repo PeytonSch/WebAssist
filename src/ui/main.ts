@@ -9,6 +9,7 @@ import { bodyLang, highlight, paint, type Lang, type Token } from './highlight';
 import { findJsonIn } from './jsonmodel';
 import { closeJsonViewer, initJsonViewer, jsonViewerOpen, openJsonViewer, type JsonSource } from './jsonviewer';
 import { initSettings, openSettings, settingsOpen, updateSettingsStatus } from './settings';
+import { firstOwnRef, initSource, linkSources, openSource, setSourceContext, showError } from './source';
 import { initTitlebar } from './titlebar';
 import { closeTomcat, initTomcat, onWarNotice, openTomcat, syncWarNotices, tomcatOpen } from './tomcat';
 
@@ -723,6 +724,18 @@ function facts(pairs: [string, Child | number | null | undefined][]): HTMLElemen
   return dl;
 }
 
+/**
+ * A class name in the facts (logger, exception), marked for Go to source like the stack frames:
+ * it becomes a link when the class is in your sources. Text after the name stays plain.
+ */
+function classFact(text: string | null | undefined, kind: 'logger' | 'exception'): HTMLElement | null {
+  if (!text) return null;
+  const m = /^((?:[A-Za-z_$][\w$]*\.)+[A-Za-z_$][\w$]*)([\s\S]*)$/.exec(text);
+  if (!m) return h('span', {}, text);
+  // One find block, so a search can match across the link and the text after it.
+  return h('span', { 'data-find-block': '' }, h('span', { class: 'fact-src', 'data-src': m[1], 'data-src-kind': kind }, m[1]), m[2]);
+}
+
 function code(text: string, lang: Lang = 'text'): HTMLElement {
   return paint(h('pre', { class: 'code' }), highlight(text, lang));
 }
@@ -740,7 +753,8 @@ function excerpt(parts: [string, Lang][], max = 16): HTMLElement {
     }
     const shown = text.split('\n').slice(0, left);
     left -= shown.length;
-    tokens.push(...highlight(shown.join('\n'), lang));
+    // A related event's card selects that event when clicked, so its classes are not links.
+    tokens.push(...highlight(shown.join('\n'), lang).map(({ text, cls }) => ({ text, cls })));
   }
   const hidden = total - (max - left);
   if (hidden > 0) tokens.push({ text: `\n… ${hidden} more lines`, cls: 'dim' });
@@ -963,6 +977,8 @@ function renderDetail(): void {
   const d = row.ev.data;
   const res = resOf(row);
   const rd = res?.data ?? {};
+  // Before anything is painted: links to the sources depend on the event's webapp.
+  setSourceContext(row.ev.source === 'tomcat' ? d.webapp : null);
 
   const close = h('button', { class: 'btn btn-ghost btn-icon', title: 'Close (Esc)', 'aria-label': 'Close' }, '✕');
   close.onclick = () => select(null);
@@ -994,10 +1010,13 @@ function renderDetail(): void {
       ['Type', d.type], ['Location', d.url ? `${d.url}${d.line ? ':' + d.line : ''}` : null], ['Page', d.pageUrl],
     ])));
   } else if (g === 'log') {
-    add(section('Log entry', facts([
-      ['Webapp', d.webapp], ['Exception', d.exception], ['Root cause', d.rootCause !== d.exception ? d.rootCause : null],
+    const entry = section('Log entry', facts([
+      ['Webapp', d.webapp], ['Logger', classFact(d.logger, 'logger')], ['Exception', classFact(d.exception, 'exception')],
+      ['Root cause', d.rootCause !== d.exception ? classFact(d.rootCause, 'exception') : null],
       ['Thread', d.thread], ['Severity', d.severity], ['Request ID', ridOf(row)], ['File', d.file],
-    ])));
+    ]));
+    if (row.ev.source === 'tomcat') entry.append(sourceActions());
+    add(entry);
   } else if (g === 'query') {
     add(section('Query', facts([
       ['Duration', fmtDuration(d.durationMs)], ['Backend PID', d.pid], ['Request ID', ridOf(row)], ['File', d.file],
@@ -1048,8 +1067,30 @@ function renderDetail(): void {
   // Re-inserting the bar, even in place, would take focus from it.
   if (finder.bar.parentElement !== detail) detail.append(finder.bar);
   detail.append(body);
+  linkSources(body);
   refreshRelated();
   finder.refresh(newEvent);
+}
+
+/** The Go to source button of a Tomcat log entry. */
+function sourceActions(): HTMLElement {
+  const btn = h('button', { class: 'btn btn-sm', type: 'button', title: 'Open the first stack frame from your code (or the logger’s class) in your editor (G)' }, 'Go to source');
+  btn.onclick = () => void goToSource();
+  return h('div', { class: 'd-actions' }, btn);
+}
+
+/** G: opens the event's own code at the top of its stack trace, or the logger's class. */
+async function goToSource(): Promise<void> {
+  const row = state.selected;
+  if (!row || groupOf(row) !== 'log' || detail.hidden) return;
+  const body = detail.querySelector<HTMLElement>('.d-body');
+  const ref = body ? await firstOwnRef(body) : null;
+  if (ref) return openSource(ref);
+  showError({
+    error: 'Nothing in this entry is in your sources.',
+    hint: 'Stack frames, the logger and exception classes are looked up in the projects listed under Settings › Source code.',
+    settings: true,
+  });
 }
 
 /** Save to catalog, Edit and send, Replay: a recorded request sent again from the API screen. */
@@ -1431,6 +1472,7 @@ function init(): void {
     },
   });
   initJsonViewer({ onToggle: () => renderList() });
+  initSource();
   $('btn-tomcat').onclick = () => openTomcat();
   initApi({
     onToggle: (open) => {
@@ -1475,6 +1517,7 @@ function init(): void {
       }
       case 'r': case 'R': setFilters({ ...DEFAULT_FILTERS }); break;
       case 'v': case 'V': viewJson(jsonForSelected()); break;
+      case 'g': case 'G': void goToSource(); break;
       case '?': help.showModal(); break;
     }
   });

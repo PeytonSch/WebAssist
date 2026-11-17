@@ -109,6 +109,8 @@ describe('SourceService.open', () => {
     const s = await service({ kind: 'idea' }, runner, machine({ env: { PATH: '/opt/bin' }, files: ['/opt/bin/idea'] }));
     const r = await s.open({ className: 'com.example.orders.OrderService', webapp: 'shop' });
     expect(r.line).toBe(4);
+    // A JUL logger names Class.method.
+    expect((await s.open({ className: 'com.example.orders.OrderService.load', webapp: 'shop' })).line).toBe(4);
     expect(runner.launches[0]).toMatchObject({ file: '/opt/bin/idea', args: ['--line', '4', shopFile()] });
   });
 

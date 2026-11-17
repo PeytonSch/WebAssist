@@ -69,6 +69,8 @@ interface DirRec {
 /** Stops a source folder pointed at a whole drive from filling memory. */
 export const MAX_FILES = 300_000;
 export const POLL_MS = 10_000;
+/** More changed folders than this in one poll, and the index is rebuilt instead of patched. */
+const MAX_PATCHED_DIRS = 50;
 /** A lookup that misses rebuilds the index (in the background) when it is at least this old. */
 const STALE_MS = 60_000;
 
@@ -241,21 +243,26 @@ export class SourceIndex {
 
   private async refreshOnce(): Promise<void> {
     const t = this.t;
-    let changed = false;
+    // First only look: which folders changed. Many at once (a branch switch, a pull) is cheaper
+    // to read again from scratch than to patch folder by folder.
+    const changed: { dir: string; rec: DirRec; exists: boolean }[] = [];
     let n = 0;
     for (const [dir, rec] of [...t.dirs]) {
       if (++n % 200 === 0) await yieldNow();
-      if (t !== this.t) return; // a build replaced the tables meanwhile
+      if (t !== this.t || this.stopped) return; // a build replaced the tables meanwhile
       const st = await fs.stat(dir).catch(() => null);
-      if (st?.isDirectory() && st.mtimeMs === rec.mtimeMs) continue;
-      if (!t.dirs.has(dir)) continue; // removed along with a parent already
-      changed = true;
+      if (!st?.isDirectory() || st.mtimeMs !== rec.mtimeMs) changed.push({ dir, rec, exists: !!st?.isDirectory() });
+    }
+    if (!changed.length || t !== this.t) return;
+    if (changed.length > MAX_PATCHED_DIRS) return this.build();
+    for (const { dir, rec, exists } of changed) {
+      if (!t.dirs.has(dir)) continue; // gone along with a parent already
       // Forget the folder and everything below it, then read it again if it is still there.
       for (const d of [...t.dirs.keys()]) if (d === dir || isInside(d, dir)) t.dirs.delete(d);
       for (const f of [...t.files.keys()]) if (dirname(f) === dir || isInside(f, dir)) t.removeFile(f);
-      if (st?.isDirectory()) await this.scanDir(t, dir, rec.sourceDir, rec.project, rec.module);
+      if (exists) await this.scanDir(t, dir, rec.sourceDir, rec.project, rec.module);
     }
-    if (changed && t === this.t) {
+    if (t === this.t) {
       this.count();
       this.generation++;
     }

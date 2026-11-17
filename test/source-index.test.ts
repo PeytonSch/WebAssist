@@ -52,14 +52,16 @@ describe('project roots', () => {
       'dev/shop/pom.xml': '',
       'dev/shop/target/shop-1.2.0.war': 'x',
       'dev/admin/pom.xml': '', // target deleted by mvn clean
+      'dev/shopx/pom.xml': '', // a name that starts like shop
+      'dev/shopx/target/shopx.war': 'x',
       'dev/notes/readme.txt': '',
       'libs/common/src/main/java/A.java': '',
     });
     const { projects, problems } = await findProjects([join(dir, 'dev', '*', 'target'), join(dir, 'dev', 'admin', 'target')], [join(dir, 'libs', 'common'), join(dir, 'missing')]);
     const roots = projects.map((p) => p.root).sort();
-    expect(roots).toEqual([join(dir, 'dev', 'admin'), join(dir, 'dev', 'shop'), join(dir, 'libs', 'common')].sort());
+    expect(roots).toEqual([join(dir, 'dev', 'admin'), join(dir, 'dev', 'shop'), join(dir, 'dev', 'shopx'), join(dir, 'libs', 'common')].sort());
     const shop = projects.find((p) => p.root.endsWith('shop'))!;
-    expect(shop.names).toEqual(expect.arrayContaining(['shop', 'shop-1.2.0']));
+    expect(shop.names.sort()).toEqual(['shop', 'shop-1.2.0']);
     expect(problems).toEqual([`Folder not found: ${join(dir, 'missing')}`]);
   });
 });

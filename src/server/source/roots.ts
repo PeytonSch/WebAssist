@@ -111,7 +111,7 @@ export async function findProjects(warWatch: string[], sourceDirs: string[]): Pr
         names.push(basename(d));
         if (d === root || dirname(d) === d) break;
       }
-      const here = wars.filter((w) => w.startsWith(start));
+      const here = wars.filter((w) => isInside(w, start));
       add(root, pattern, [...names.filter((n) => !/^(target|build|out|libs)$/i.test(n)), ...here.flatMap(warNames)]);
     }
     if (!any) problems.push(`No project (pom.xml, build.gradle or settings.gradle) found above ${pattern}`);

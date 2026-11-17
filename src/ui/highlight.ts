@@ -12,6 +12,15 @@
 export interface Token {
   text: string;
   cls?: string;
+  /** A Java class this token names (a stack frame, logger or exception), for Go to source. */
+  ref?: SourceRef;
+}
+
+/** Where a token points in the sources: the class, and for a stack frame its file and line. */
+export interface SourceRef {
+  cls: string;
+  file?: string;
+  line?: number;
 }
 
 export type Lang = 'json' | 'sql' | 'plan' | 'log' | 'xml' | 'form' | 'text';
@@ -81,6 +90,12 @@ export function paint(el: HTMLElement, tokens: Token[]): HTMLElement {
   return el;
 }
 
+/** Called for each span that names a class, also those painted later; see source.ts. */
+let refHook: ((span: HTMLElement) => void) | null = null;
+export function onSourceRef(hook: (span: HTMLElement) => void): void {
+  refHook = hook;
+}
+
 function spans(tokens: Token[], from: number, to: number): DocumentFragment {
   const frag = document.createDocumentFragment();
   for (let i = from; i < Math.min(to, tokens.length); i++) {
@@ -92,6 +107,13 @@ function spans(tokens: Token[], from: number, to: number): DocumentFragment {
     const span = document.createElement('span');
     span.className = `hl-${t.cls}`;
     span.textContent = t.text;
+    if (t.ref) {
+      // Only attributes: the text stays as it is, so the find bar and copying see plain text.
+      span.dataset.src = t.ref.cls;
+      if (t.ref.file) span.dataset.srcFile = t.ref.file;
+      if (t.ref.line) span.dataset.srcLine = String(t.ref.line);
+      refHook?.(span);
+    }
     frag.append(span);
   }
   return frag;
@@ -105,10 +127,15 @@ const later = (fn: () => void) =>
 /** Collects tokens, merging neighbours of the same class so the DOM stays small. */
 class Out {
   readonly list: Token[] = [];
+  /** Set for the next add() only: the class the token names. Such tokens are never merged. */
+  ref: SourceRef | null = null;
   add(text: string, cls?: string): void {
+    const ref = this.ref;
+    this.ref = null;
     if (!text) return;
     const last = this.list[this.list.length - 1];
-    if (last && last.cls === cls) last.text += text;
+    if (ref && cls) this.list.push({ text, cls, ref });
+    else if (last && last.cls === cls && !last.ref) last.text += text;
     else this.list.push(cls ? { text, cls } : { text });
   }
 }
@@ -126,9 +153,10 @@ class Scan {
     re.lastIndex = this.i;
     return re.exec(this.s);
   }
-  /** Emits the next `len` characters as one token. */
-  emit(len: number, cls?: string): void {
+  /** Emits the next `len` characters as one token, optionally naming a class (see Token.ref). */
+  emit(len: number, cls?: string, ref?: SourceRef | null): void {
     this.flush();
+    this.out.ref = ref ?? null;
     this.out.add(this.s.slice(this.i, this.i + len), cls);
     this.i += len;
     this.plain = this.i;
@@ -419,7 +447,8 @@ function logHeader(sc: Scan): LineMode {
     else break;
   }
   if ((m = sc.at(LOGGER))) {
-    sc.emit(m[0].length, 'logger');
+    const [, name, line] = /^(.*?)(?::(\d+))?$/.exec(m[0])!;
+    sc.emit(m[0].length, 'logger', javaRef(name, undefined, line ? Number(line) : undefined));
     if ((m = sc.at(BLANKS))) sc.i += m[0].length;
     if ((m = sc.at(DASHES))) sc.emit(m[0].length, 'dim');
   }
@@ -499,7 +528,26 @@ function stackLine(sc: Scan): void {
 function exceptionName(sc: Scan, name: string): void {
   const dot = name.lastIndexOf('.');
   if (dot !== -1) sc.emit(dot + 1, 'dim');
-  sc.emit(name.length - dot - 1, 'exc');
+  sc.emit(name.length - dot - 1, 'exc', dot !== -1 ? javaRef(name) : null);
+}
+
+const JVM_CLASS = /^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)+$/;
+const JVM_SOURCE = /^([\w$-]+\.(?:java|kt|groovy|scala)):(\d+)$/;
+
+/**
+ * A reference to a JVM class, for Go to source, or null when `name` is not one. Java 9+ frames
+ * may start with a module or class loader ("java.base/", "app//"), which is not part of the name.
+ */
+function javaRef(name: string, location?: string, line?: number): SourceRef | null {
+  const cls = name.replace(/^.*\//, '');
+  if (!JVM_CLASS.test(cls)) return null;
+  const loc = location ? JVM_SOURCE.exec(location) : null;
+  const ref: SourceRef = { cls };
+  if (loc) {
+    ref.file = loc[1];
+    ref.line = Number(loc[2]);
+  } else if (line) ref.line = line;
+  return ref;
 }
 
 /**
@@ -514,10 +562,12 @@ function frame(sc: Scan): void {
     // Keep "Class.method" (or "Class$Inner.lambda$0") bright and dim the package before it.
     const lastDot = name.lastIndexOf('.');
     const classDot = lastDot > 0 ? name.lastIndexOf('.', lastDot - 1) : -1;
+    // The class is everything before the method; the file and line come from the location.
+    const ref = lastDot > 0 ? javaRef(name.slice(0, lastDot), java[2]) : null;
     if (classDot !== -1) sc.emit(classDot + 1, 'dim');
-    sc.emit(name.length - classDot - 1, 'fn');
+    sc.emit(name.length - classDot - 1, 'fn', ref);
     sc.emit(1, 'dim');
-    sc.emit(java[2].length, 'loc');
+    sc.emit(java[2].length, 'loc', ref);
     sc.emit(1, 'dim');
     sc.emit(java[3].replace(/\n$/, '').length, 'dim'); // e.g. Logback's " ~[app.jar:1.0]"
     sc.end();
@@ -564,7 +614,7 @@ function tokText(out: Out, s: string, base?: string): void {
       } else {
         m = sc.at(WORD)!;
         const w = m[0];
-        if (EXC_WORD.test(w)) sc.emit(w.length, 'exc');
+        if (EXC_WORD.test(w)) sc.emit(w.length, 'exc', w.includes('.') ? javaRef(w) : null);
         else if (s[sc.i + w.length] === '=' && s[sc.i + w.length + 1] !== '=' && !isWordChar(prev)) sc.emit(w.length, 'key');
         else sc.i += w.length;
       }

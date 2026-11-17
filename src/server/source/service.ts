@@ -121,8 +121,8 @@ export class SourceService {
   }
 
   /** Which of `names` are in the sources, for the detail panel to link them. */
-  known(names: string[], webapp?: string): { generation: number; known: Record<string, number> } {
-    return { generation: this.index.generation, known: this.index.known(names, webapp) };
+  known(names: string[], webapp?: string): { generation: number; building: boolean; known: Record<string, number> } {
+    return { generation: this.index.generation, building: this.index.status().state === 'building', known: this.index.known(names, webapp) };
   }
 
   /** Opens the first indexed class, for the Test button. */
@@ -171,7 +171,9 @@ export class SourceService {
     if (!line) {
       // A logger or exception name has no line: open at the class declaration.
       const text = await readHead(chosen.file);
-      const simple = outerClass(name).split('.').pop()!;
+      // JUL names Class.method; the method (lower case) is not the class.
+      const parts = outerClass(name).split('.');
+      const simple = parts.length > 1 && /^[a-z_<]/.test(parts[parts.length - 1]) ? parts[parts.length - 2] : parts[parts.length - 1];
       line = (text && declarationLine(text, simple)) || 1;
     }
     const target: Target = { file: chosen.file, line, column: Math.max(1, Math.floor(Number(req.column) || 1)), dir: chosen.root || dirname(chosen.file) };

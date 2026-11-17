@@ -1,5 +1,7 @@
 import type { DesktopBridge } from '../desktop/preload';
 import type { ChromeSetup } from '../server/chrome-launch';
+import type { EditorKind, ProgramLocation } from '../server/source/editor';
+import type { IndexStatus } from '../server/source/index';
 import type { Config, FieldError, StartCommand } from '../server/config';
 import { chromeArgs, chromeCommandLines, typicalChromePath } from '../shared/chrome-command';
 import type { HubStatus } from '../shared/types';
@@ -733,6 +735,13 @@ function sections(): SectionDef[] {
       fields: tomcatManagementFields,
     },
     {
+      id: 'source',
+      nav: 'Source code',
+      title: 'Source code',
+      desc: 'Go to source: Java classes in logs (stack frames, loggers, exceptions) open in your editor at the line. The sources are found above the WAR build folders and in any folders added here.',
+      fields: sourceFields,
+    },
+    {
       id: 'postgres',
       nav: 'Postgres',
       title: 'Postgres',
@@ -1026,6 +1035,239 @@ function tomcatManagementFields(): HTMLElement[] {
         ' allowed. When deploying a WAR, Debug Hub offers to keep these files from the deployed copy (anywhere in the webapp) instead of the ones in the new build, e.g. local settings you edited there.',
       ),
     ),
+  ];
+}
+
+// ── Source code ─────────────────────────────────────────
+// The editor and terminal lists mirror src/server/source/editor.ts; the hub works out which
+// program would run (it knows the machine) and which projects it found.
+
+const EDITORS: [EditorKind, string][] = [
+  ['', 'None'],
+  ['vscode', 'VS Code'],
+  ['idea', 'IntelliJ IDEA'],
+  ['emacs', 'Emacs / Doom Emacs (emacsclient)'],
+  ['nvim', 'Neovim'],
+  ['custom', 'Custom command'],
+];
+
+/** Terminal presets for nvim in a new window; the same templates the hub knows. */
+const TERMINALS: [string, string][] = [
+  ['WezTerm', 'wezterm start --cwd {dir} -- {cmd}'],
+  ...(isWindows ? ([['Windows Terminal', 'wt -d {dir} {cmd}']] as [string, string][]) : []),
+  ...(!isWindows ? ([['kitty', 'kitty --directory {dir} {cmd}']] as [string, string][]) : []),
+  ['Alacritty', 'alacritty --working-directory {dir} -e {cmd}'],
+  ...(!isWindows && !isMac ? ([['GNOME Terminal', 'gnome-terminal --working-directory={dir} -- {cmd}'], ['Konsole', 'konsole --workdir {dir} -e {cmd}']] as [string, string][]) : []),
+];
+
+interface SourceStatus {
+  index: IndexStatus;
+  generation: number;
+  sample: string | null;
+}
+
+const editorKeys = ['kind', 'program', 'nvimReuse', 'terminal', 'custom'] as const;
+const editorUnsaved = () => editorKeys.some((k) => getPath(`editor.${k}`) !== S.loaded?.config.editor?.[k]);
+const foldersUnsaved = () =>
+  JSON.stringify(getPath('editor.sourceDirs') ?? []) !== JSON.stringify(S.loaded?.config.editor?.sourceDirs ?? []) ||
+  JSON.stringify(getPath('tomcat.warWatch') ?? []) !== JSON.stringify(S.loaded?.config.tomcat.warWatch ?? []);
+
+/** What the editor program box would run, looked up by the hub for the unsaved choice. */
+function editorProgramInput(): HTMLElement {
+  const note = h('div', { class: 'list-note' });
+  let seq = 0;
+  let timer = 0;
+  const run = async () => {
+    const kind = String(getPath('editor.kind') ?? '');
+    const program = String(getPath('editor.program') ?? '');
+    const mine = ++seq;
+    if (!kind || kind === 'custom') return note.replaceChildren();
+    let loc: { name: string; program: ProgramLocation | null; nvimServers?: number };
+    try {
+      loc = await (await fetch(`/api/source/editor?kind=${encodeURIComponent(kind)}&program=${encodeURIComponent(program)}`)).json();
+    } catch {
+      return;
+    }
+    if (mine !== seq) return;
+    const p = loc.program;
+    const parts: Child[] = [];
+    if (p?.path) parts.push(h('span', { class: 'pm ok', title: p.tried.join('\n') }, `${p.source === 'found' ? 'Found' : 'Using'} ${p.path}`));
+    else if (p?.problem) parts.push(h('span', { class: 'pm warn', title: p.tried.join('\n') }, p.problem));
+    if (kind === 'nvim' && loc.nvimServers !== undefined) {
+      parts.push(h('span', { class: 'pm muted' }, loc.nvimServers ? `${loc.nvimServers} running nvim${loc.nvimServers === 1 ? '' : 's'} found right now` : 'No running nvim found right now'));
+    }
+    note.replaceChildren(...parts.filter((x): x is Node | string => !!x));
+  };
+  S.derived.push(() => {
+    clearTimeout(timer);
+    timer = window.setTimeout(() => void run(), 300);
+  });
+  void run();
+  return h('div', {}, fileInput('editor.program', 'Choose the editor program', 'Found automatically'), note);
+}
+
+/** The terminal preset list and its command; editing the command by hand makes it "Custom". */
+function terminalInput(): HTMLElement {
+  const sel = h('select', { class: 'input', 'aria-label': 'Terminal' },
+    ...TERMINALS.map(([label, t]) => h('option', { value: t }, label)),
+    h('option', { value: '' }, 'Custom…'),
+  ) as HTMLSelectElement;
+  const input = textInput('editor.terminal', { mono: true, placeholder: TERMINALS[0][1] });
+  const sync = () => {
+    const v = String(getPath('editor.terminal') ?? '').trim();
+    sel.value = TERMINALS.some(([, t]) => t === v) ? v : '';
+  };
+  sel.addEventListener('change', () => {
+    if (!sel.value) return input.focus();
+    input.value = sel.value;
+    change('editor.terminal', sel.value);
+  });
+  input.addEventListener('input', sync);
+  sync();
+  return h('div', { class: 'src-terminal' }, sel, input);
+}
+
+/** The projects the hub indexed, with their class counts and where each came from. */
+function projectsFound(): HTMLElement {
+  const out = h('div', { class: 'src-projects' });
+  const rescan = h('button', { type: 'button', class: 'btn' }, 'Rescan') as HTMLButtonElement;
+  const note = h('span', { class: 'pm warn' }, 'Save to look in the changed folders.');
+  let timer = 0;
+  const show = (st: SourceStatus) => {
+    const ix = st.index;
+    const rows: Child[] = ix.projects.map((p) =>
+      h('div', { class: 'src-project' },
+        h('div', { class: 'src-project-head' },
+          h('strong', {}, p.name),
+          h('span', { class: 'pm muted' }, `${p.classes.toLocaleString('en-US')} class${p.classes === 1 ? '' : 'es'}${p.modules.some(Boolean) ? ` · modules: ${p.modules.map((m) => m || '(root)').join(', ')}` : ''}`),
+        ),
+        h('code', { class: 'path' }, p.root),
+        h('span', { class: 'pm muted' }, `From ${p.from.join(', ')}`),
+      ),
+    );
+    if (!ix.projects.length && ix.state !== 'building') rows.push(h('div', { class: 'list-empty' }, 'No projects found yet. Add a WAR build folder under Tomcat server, or a project folder above.'));
+    for (const problem of ix.problems) rows.push(h('div', {}, h('span', { class: 'pm warn' }, problem)));
+    const summary = ix.state === 'building'
+      ? 'Indexing…'
+      : ix.builtAt ? `${ix.classes.toLocaleString('en-US')} classes in ${ix.files.toLocaleString('en-US')} files, indexed in ${((ix.buildMs ?? 0) / 1000).toFixed(1)} s` : '';
+    out.replaceChildren(h('div', { class: 'pm muted' }, summary), ...rows.filter((r): r is Node => !!r));
+    clearTimeout(timer);
+    if (ix.state === 'building' && S.open) timer = window.setTimeout(() => void load(), 1000);
+  };
+  const load = async () => {
+    try {
+      show(await (await fetch('/api/source/status')).json());
+    } catch {
+      /* the hub is gone */
+    }
+  };
+  rescan.addEventListener('click', async () => {
+    rescan.disabled = true;
+    out.prepend(h('div', { class: 'pm muted' }, 'Indexing…'));
+    try {
+      show(await (await fetch('/api/source/rescan', { method: 'POST' })).json());
+    } catch {
+      /* the hub is gone */
+    } finally {
+      rescan.disabled = false;
+    }
+  });
+  const update = () => (note.hidden = !foldersUnsaved());
+  S.derived.push(update);
+  update();
+  void load();
+  return h('div', { class: 'src-found' }, h('div', { class: 'input-row' }, rescan, note), out);
+}
+
+/** Opens the first indexed class in the saved editor, to check the setup. */
+function editorTest(): HTMLElement {
+  const btn = h('button', { type: 'button', class: 'btn' }, 'Open a file') as HTMLButtonElement;
+  const note = h('div', { class: 'list-note' });
+  const unsaved = h('span', { class: 'pm warn' }, 'Save first: the test uses the saved settings.');
+  const update = () => {
+    unsaved.hidden = !editorUnsaved();
+    btn.disabled = editorUnsaved() || !getPath('editor.kind');
+  };
+  btn.addEventListener('click', async () => {
+    btn.disabled = true;
+    note.replaceChildren(h('span', { class: 'pm muted' }, 'Opening…'));
+    try {
+      const res = await fetch('/api/source/test', { method: 'POST' });
+      const body = await res.json();
+      note.replaceChildren(
+        res.ok ? h('span', { class: 'pm ok' }, body.message) : h('span', { class: 'pm warn' }, [body.error, body.hint].filter(Boolean).join(' ')),
+        ...(body.output ? [h('code', { class: 'path' }, body.output)] : []),
+        ...(body.command ? [h('span', { class: 'pm muted', title: 'The command that was run' }, body.command)] : []),
+      );
+    } catch (err) {
+      note.replaceChildren(h('span', { class: 'pm warn' }, (err as Error).message));
+    } finally {
+      update();
+    }
+  });
+  S.derived.push(update);
+  update();
+  return h('div', {}, h('div', { class: 'input-row' }, btn, unsaved), note);
+}
+
+function sourceFields(): HTMLElement[] {
+  const program = field('editor.program', 'Program', editorProgramInput(), 'Leave empty to find it on PATH and where it is usually installed. Give the full path if it is somewhere else.');
+  const reuse = field(
+    'editor.nvimReuse',
+    'Use a running nvim',
+    toggle('editor.nvimReuse', 'Use a running nvim'),
+    'Opens the file in an nvim that is already running (Neovim 0.9 or later; found by the address every nvim listens on), preferring one whose working folder is in the project. It cannot bring that terminal window to the front.',
+  );
+  const terminal = field(
+    'editor.terminal',
+    'New window',
+    terminalInput(),
+    h('span', {}, 'Without a running nvim: the terminal that starts nvim in a new window. ', h('code', {}, '{cmd}'), ' is ', h('code', {}, 'nvim +<line> <file>'), ' as separate arguments, ', h('code', {}, '{dir}'), ' the project folder. To start it through a shell, e.g. nushell: ', h('code', {}, 'wezterm start -- nu -c "nvim +{line} {file}"'), '.'),
+    { wide: true },
+  );
+  const custom = field(
+    'editor.custom',
+    'Command',
+    textInput('editor.custom', { mono: true, placeholder: isWindows ? '"C:/Program Files/Sublime Text/subl.exe" {file}:{line}:{column}' : 'subl {file}:{line}:{column}' }),
+    h('span', {}, 'Placeholders: ', h('code', {}, '{file}'), ' ', h('code', {}, '{line}'), ' ', h('code', {}, '{column}'), ' ', h('code', {}, '{dir}'), ' (the project folder). Run without a shell; put quotes around a program path with spaces. Inside a quoted argument with spaces (a command line for a shell, ', h('code', {}, 'nu -c "…"'), '), a value with spaces is quoted for that shell: ', isWindows ? 'forward slashes in double quotes.' : 'in single quotes.'),
+    { wide: true },
+  );
+  const test = field(null, 'Test', editorTest(), 'Opens the first indexed class in your editor.');
+  const show = () => {
+    const kind = getPath('editor.kind');
+    program.hidden = !kind || kind === 'custom';
+    reuse.hidden = kind !== 'nvim';
+    terminal.hidden = kind !== 'nvim';
+    custom.hidden = kind !== 'custom';
+    test.hidden = !kind;
+  };
+  S.derived.push(show);
+  show();
+  return [
+    field(
+      'editor.kind',
+      'Editor',
+      select('editor.kind', EDITORS),
+      'Click a stack frame from your code, the logger or an exception class in an event (or press G) to open it there. Emacs needs its server running: M-x server-start.',
+    ),
+    program,
+    reuse,
+    terminal,
+    custom,
+    test,
+    field(
+      'editor.sourceDirs',
+      'More project folders',
+      listEditor('editor.sourceDirs', {
+        itemLabel: 'Project folder',
+        addLabel: 'Add folder',
+        placeholder: isWindows ? 'C:/dev/common-lib' : '/home/me/dev/common-lib',
+        empty: 'None: only the projects above the WAR build folders.',
+        browse: { kind: 'folder', title: 'Choose a project folder' },
+      }),
+      h('span', {}, 'Projects without a WAR build folder, e.g. a shared library. Their ', h('code', {}, 'src/*/java'), ', ', h('code', {}, 'kotlin'), ', ', h('code', {}, 'groovy'), ' and ', h('code', {}, 'scala'), ' folders are indexed, in every module.'),
+    ),
+    field(null, 'Projects found', projectsFound(), 'Found by walking up from each WAR build folder (Tomcat server) to the folder with pom.xml, build.gradle or settings.gradle: the outermost within four levels, stopping at the repository root. Kept up to date as files are added.', { wide: true }),
   ];
 }
 

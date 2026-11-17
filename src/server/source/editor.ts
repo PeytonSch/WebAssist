@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { lstatSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { homedir, tmpdir, userInfo } from 'node:os';
 import { posix, win32 } from 'node:path';
 
@@ -85,7 +85,13 @@ export function thisEditorMachine(): EditorMachine {
       try {
         return statSync(p).isFile();
       } catch {
-        return false;
+        // Windows app execution aliases (wt.exe in WindowsApps) cannot be followed by stat, but
+        // they run; the link itself is there.
+        try {
+          return process.platform === 'win32' && !lstatSync(p).isDirectory();
+        } catch {
+          return false;
+        }
       }
     },
     listDir: (p) => {
