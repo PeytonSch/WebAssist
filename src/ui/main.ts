@@ -1,3 +1,6 @@
+// First, before any module that calls the hub: makes fetch('/api/…') work under a context path.
+import './base';
+import { connectLive } from './live';
 import { correlate, type CorrItem, type Correlation } from '../shared/correlate';
 import { RouteMatcher, serverPath, type Route, type RouteTemplate } from '../shared/route';
 import type { HubEvent, HubStatus, Level, ServerMessage, SessionInfo } from '../shared/types';
@@ -1307,26 +1310,26 @@ function onStatus(status: HubStatus): void {
   renderStatus();
 }
 
+/** The live channel (src/ui/live.ts): a WebSocket, or Server-Sent Events where that cannot connect. */
 function connect(): void {
-  const ws = new WebSocket(`ws://${location.host}/ws`);
-  ws.onopen = () => {
-    state.connected = true;
-    renderStatus();
-    // Pick up anything recorded while the socket was down.
-    if (state.mode === 'live' && state.session) void openSession(state.session);
-    void syncWarNotices();
-  };
-  ws.onmessage = (e) => {
-    const msg = JSON.parse(e.data) as ServerMessage;
-    if (msg.type === 'status') onStatus(msg.status);
-    else if (msg.type === 'war') onWarNotice(msg.war);
-    else if (state.mode === 'live' && msg.session === state.session) ingest(msg.events);
-  };
-  ws.onclose = () => {
-    state.connected = false;
-    renderStatus();
-    setTimeout(connect, 1000);
-  };
+  connectLive({
+    onOpen: () => {
+      state.connected = true;
+      renderStatus();
+      // Pick up anything recorded while the connection was down.
+      if (state.mode === 'live' && state.session) void openSession(state.session);
+      void syncWarNotices();
+    },
+    onMessage: (msg: ServerMessage) => {
+      if (msg.type === 'status') onStatus(msg.status);
+      else if (msg.type === 'war') onWarNotice(msg.war);
+      else if (state.mode === 'live' && msg.session === state.session) ingest(msg.events);
+    },
+    onClose: () => {
+      state.connected = false;
+      renderStatus();
+    },
+  });
 }
 
 // ── Wiring ──────────────────────────────────────────────

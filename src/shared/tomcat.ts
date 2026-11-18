@@ -25,6 +25,8 @@ export interface WebappInfo {
   sessions: number | null;
   /** Listed by the Manager but not in the webapps folder (deployed from elsewhere), so it cannot be disabled. */
   external: boolean;
+  /** Debug Hub's own webapp, when it runs inside this Tomcat: not to be stopped, disabled or deleted from its own page. */
+  self?: boolean;
 }
 
 export type ScriptKind = 'start' | 'stop';
@@ -174,6 +176,13 @@ export interface TomcatState {
   };
   scripts: { start: ScriptRun | null; stop: ScriptRun | null };
   wars: WarInfo[];
+  /** Set when Debug Hub runs as a webapp inside the Tomcat this page manages. */
+  hosted?: {
+    /** The context path Debug Hub is served under, "/" for ROOT. */
+    path: string;
+    /** e.g. "Apache Tomcat/9.0.89". */
+    server: string;
+  };
 }
 
 export type WebappAction = 'start' | 'stop' | 'reload' | 'disable' | 'enable';

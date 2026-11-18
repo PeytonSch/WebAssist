@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { CollectorStatus, HubEvent, Level } from '../../shared/types';
 import type { Config } from '../config';
+import { isOwnUi, ownUiHosts } from '../hosted/self';
 import { headerValue, makeEvent, redactHeaders, truncateText } from '../normalize';
 import { CdpConnection } from './cdp';
 import { describeProbe, hostPort, probeChrome } from './chrome-probe';
@@ -184,6 +185,8 @@ export class ChromeCollector {
       const u = new URL(url);
       const local = u.hostname === 'localhost' || u.hostname === '127.0.0.1';
       if (local && u.port === String(this.cfg.port)) return false;
+      // Inside Tomcat the UI is served under the webapp's address instead (src/server/hosted).
+      if (isOwnUi(u, ownUiHosts)) return false;
     } catch {
       /* about:blank and friends are fine */
     }

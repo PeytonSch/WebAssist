@@ -132,6 +132,9 @@ window that appears and click the buttons.
 - **Installers:** a release build installs like any app (Windows installer, macOS `.dmg`) and
   updates itself from GitHub Releases rather than from git. See
   [docs/updates.md](docs/updates.md).
+- **Inside Tomcat:** `npm run build:war` builds `dist/debug-hub.war`. Drop it into a Tomcat's
+  `webapps` folder and open `http://localhost:8080/debug-hub/`: Debug Hub then already knows
+  that Tomcat's folders. See [Running inside Tomcat](#running-inside-tomcat).
 
 On Windows the desktop app draws its own title bar in its theme: the ☰ button at the top left
 opens the menu, and the top bar drags the window (double-click to maximize).
@@ -524,13 +527,126 @@ API client requests are recorded like browser requests: credential headers redac
 kept up to `maxBodyBytes`.
 
 The API rejects requests whose `Host` is not `localhost` or `127.0.0.1`, and requests from
-other origins, so another site open in your browser cannot read a session.
+other origins, so another site open in your browser cannot read a session. Inside Tomcat the
+same holds through Tomcat's address; see Security below.
+
+## Running inside Tomcat
+
+Debug Hub can be deployed as a webapp and used from a browser, with no desktop app and no
+terminal. It then runs inside the Tomcat it watches, and fills in its settings from where it
+was deployed.
+
+```
+npm run build:war        # writes dist/debug-hub.war (only Node is needed to build it)
+```
+
+Copy `debug-hub.war` into the Tomcat's `webapps` folder (or deploy it with the Manager) and
+open `http://localhost:8080/debug-hub/`. The file name is the address: `hub.war` is served at
+`/hub/`, `ROOT.war` at `/`.
+
+**What it needs.** Tomcat 9, 10 or 11 with JSP support (the standard download has it), on
+Java 8 or later, and **Node.js 18 or later on the same machine**: Debug Hub is a Node.js
+program, and the webapp starts it as a child process of Tomcat and forwards requests to it.
+Node is looked for on the `PATH` of the account Tomcat runs as and in the usual install folders.
+If it is elsewhere, name it with the Java system property `debughub.node`, e.g.
+`-Ddebughub.node=/opt/node/bin/node` in `CATALINA_OPTS` (`bin/setenv.sh` or `bin\setenv.bat`),
+or the environment variable `DEBUG_HUB_NODE`. Without a usable Node the page says so, and
+looks again every 10 seconds, so installing Node in its usual place is enough (a changed `PATH`
+needs a Tomcat restart, like the settings below).
+
+It was built and tested against Tomcat 7.0.96 (the whole WAR) and Tomcat 10.1.36 (the
+launcher's code, compiled as a servlet, since that machine had no JSP engine for it). Tomcat 9
+and 11 are expected to work the same way but have not been run.
+
+Every setting of the webapp itself can be given three ways, the first that is set winning: the
+system property `debughub.<name>`, the environment variable `DEBUG_HUB_<NAME>`, or the context
+parameter `debughub.<name>` (a `<Parameter>` in `conf/Catalina/localhost/debug-hub.xml`). The
+names are `node`, `data`, `remote`, `hosts` and `role`. They are read when the webapp starts.
+
+**What is detected.** On first open, with nothing configured, the timeline follows this
+Tomcat's logs and the Tomcat page lists its webapps. Settings you have not set are filled in
+from the deploy path, and shown in Settings as ordinary values marked **Detected** that you can
+change or clear (a cleared one stays cleared, with the detected value offered next to it):
+
+| Setting | Detected as |
+|---|---|
+| `tomcat.webappsDir` | The folder Tomcat deployed Debug Hub in (`CATALINA_BASE/webapps`, or a Host's own `appBase`). If the webapp lives elsewhere (a context file pointing at a build folder) or runs from the WAR without being unpacked, `CATALINA_BASE/webapps`. |
+| `tomcat.logsDir`, `tomcat.enabled` | `CATALINA_BASE/logs`, and Tomcat recording switched on. |
+| `tomcat.home` | `CATALINA_HOME`, for Stop Tomcat. |
+| `tomcat.javaHome` | The Java this Tomcat runs on (`java.home`). |
+| `tomcat.disabledDir` | `webapps-disabled` next to `webapps`; created by the first Disable. |
+| `tomcat.accessDurationUnit` | `us` on Tomcat 10 and later. |
+
+Links to webapps on the Tomcat page use the address you opened Debug Hub under. Not detected:
+the Tomcat Manager login, WAR build folders, Postgres, the API base URL. Debug Hub can also
+manage a different Tomcat than the one it runs in: point the settings at it.
+
+**Where settings and data live.** In `CATALINA_BASE/debug-hub-data` (settings file, sessions,
+saved API requests, the Chrome profile), **not** in the webapp folder, which Tomcat deletes on
+every redeploy. Set `debughub.data` to keep it elsewhere; if Tomcat's folder is read-only for
+its account, `.debug-hub` in that account's home folder is used. What the hub prints goes to
+`debug-hub.log` in Tomcat's `logs` folder. The `port` setting is not used: the hub listens on a
+private port on `127.0.0.1` that changes with every start.
+
+**Security.** On its own, Debug Hub can only be reached from the machine it runs on. Inside
+Tomcat it is reachable by whoever can reach Tomcat, and it can run scripts, deploy webapps and
+show captured requests. So:
+
+- **Only this computer by default.** A browser on another machine gets a page saying so. Use
+  it on the server, or through a tunnel (`ssh -L 8080:localhost:8080 you@server`).
+- **Other computers only when you say so:** `debughub.remote` set to addresses and networks
+  (`-Ddebughub.remote=192.168.1.0/24,10.0.0.7`) or to `all`. Anyone let in can do everything
+  Debug Hub can, including running commands as Tomcat's account, so pair it with a login:
+  `debughub.role=<role>` makes every request log in to Tomcat (HTTP Basic, against
+  `conf/tomcat-users.xml` or whatever realm Tomcat uses) with a user in that role. Use https,
+  or a trusted network, since Basic logins are not encrypted. Tomcat's own means work as well:
+  a `RemoteAddrValve` in the webapp's context file, or a firewall.
+- **Behind a reverse proxy on the same machine** (nginx, Apache httpd) every visitor looks
+  local to Tomcat. Requests that carry `X-Forwarded-For`, `Forwarded` or `X-Real-IP` are
+  therefore never treated as local: they need `debughub.remote`, checked against the last
+  address in `X-Forwarded-For`, or `all`.
+- **Host names.** Requests are accepted under `localhost`, an IP address or the machine's own
+  name. Any other name (a DNS alias, the proxy's public name) must be allowed with
+  `debughub.hosts=dev.example.com` (`*.example.com` for a whole domain); this is what stops a
+  web site from pointing its own domain at your machine. Requests from other web sites are
+  refused as before.
+- The hub itself still listens on `127.0.0.1` only, and answers nobody but the webapp's
+  launcher, which proves itself with a secret made up at each start.
+
+**Running inside the Tomcat it manages.**
+
+- Its own webapp is marked **Debug Hub** on the Tomcat page and cannot be stopped, reloaded,
+  disabled or deleted from there. Deploying a new `debug-hub.war` over it is fine: Debug Hub
+  restarts with the new build and the page reconnects, with settings and sessions kept.
+- **Start Tomcat** is off (it is running), start commands can still be run one by one, and
+  **Stop Tomcat** asks first: it stops Debug Hub too, and Tomcat then has to be started by
+  hand. These guards only apply while the webapps folder in Settings is this Tomcat's.
+- Used from another computer, **Start Chrome**, **Show in Explorer** and **Go to source** would
+  act on the server, so they are refused there. Chrome is still recorded from wherever
+  `chrome.host` and `chrome.port` point.
+- Debug Hub's own requests are left out of the timeline, and its own page is not recorded when
+  opened in the debugged Chrome.
+
+**Limitations.**
+
+- Live updates use Server-Sent Events instead of a WebSocket, through one Tomcat request
+  thread per open tab; browsers allow about six such connections per site over HTTP/1.1, so
+  keep it to a few tabs. Undeploying takes about two seconds longer while a tab is open.
+- If the hub process stops, it is started again (after 1 s, backing off to 30 s) and a new
+  session begins. It stops with the webapp, and by itself if Tomcat is killed.
+- Programs it starts (start commands, another Tomcat's scripts) run as Tomcat's account and do
+  not inherit Tomcat's own `CATALINA_*` and `JAVA_OPTS` variables.
+- The desktop app's parts are not there: no folder pickers, no self-update. Update by
+  deploying a newer WAR.
+- A Tomcat set up to unload idle JSPs (`maxLoadedJsps`, `jspIdleTimeout`; both off by default)
+  would stop the hub with them.
 
 ## Development
 
 ```
 npm test              # unit tests
 npm run typecheck
+npm run build:war     # dist/debug-hub.war, see Running inside Tomcat
 npm run acceptance    # end-to-end against a real Chrome; set CHROME_PATH if it is not found
 npm run app           # the desktop app, from source
 ```

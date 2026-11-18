@@ -285,6 +285,11 @@ export function loadConfig(explicitPath?: string, cwd = process.cwd()): LoadedCo
   return { config: resolvePaths(config, dirname(file)), file };
 }
 
+/** A complete config from one as written in a file: the defaults, with the file's values over them. Paths are not resolved. */
+export function configFromRaw(raw: Record<string, unknown>): Config {
+  return merge(structuredClone(DEFAULT_CONFIG), raw);
+}
+
 // ── Editing from the settings screen ───────────────────
 
 export interface EditableConfig {

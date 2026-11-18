@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Debug Hub as a Tomcat webapp. Everything under the context path goes to one page, hub.jsp,
+  which starts the hub (a Node.js program in WEB-INF/hub) when the webapp starts and forwards
+  requests to it. See "Running inside Tomcat" in the README.
+
+  The descriptor is version 3.0 on purpose: every Tomcat from 7 to 11 reads it, with javax or
+  jakarta servlets alike. metadata-complete: there are no annotations or fragments to scan for.
+-->
+<web-app xmlns="http://java.sun.com/xml/ns/javaee"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://java.sun.com/xml/ns/javaee http://java.sun.com/xml/ns/javaee/web-app_3_0.xsd"
+         version="3.0" metadata-complete="true">
+  <display-name>Debug Hub</display-name>
+  <description>Browser, Tomcat and Postgres activity in one timeline</description>
+
+  <servlet>
+    <servlet-name>debug-hub</servlet-name>
+    <jsp-file>/WEB-INF/hub.jsp</jsp-file>
+    <!-- Start the hub with the webapp, not with the first request. -->
+    <load-on-startup>1</load-on-startup>
+  </servlet>
+  <servlet-mapping>
+    <servlet-name>debug-hub</servlet-name>
+    <url-pattern>/*</url-pattern>
+  </servlet-mapping>
+
+  <!--
+    Nobody has to log in unless debughub.role is set (see the README); then hub.jsp asks Tomcat
+    to authenticate each request this way, against conf/tomcat-users.xml or whatever realm
+    Tomcat uses.
+  -->
+  <login-config>
+    <auth-method>BASIC</auth-method>
+    <realm-name>Debug Hub</realm-name>
+  </login-config>
+</web-app>

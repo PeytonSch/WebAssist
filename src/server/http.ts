@@ -9,7 +9,9 @@ import { scanLogsFolder } from './collectors/logsdir';
 import { chromeSetup, startChrome } from './chrome-launch';
 import { matchPattern } from './collectors/tail';
 import { editableConfig, resolvePaths, saveConfig, validateConfig } from './config';
+import type { HostedServer } from './hosted/server';
 import type { Hub } from './hub';
+import { LiveStreams } from './live';
 import { detectSetup } from './setup-detect';
 import { sourceRoute } from './source/routes';
 import { tomcatRoute } from './tomcat/routes';
@@ -17,6 +19,11 @@ import { tomcatRoute } from './tomcat/routes';
 export interface ServerOptions {
   /** Where the settings screen reads and saves settings. */
   configFile: string;
+  /**
+   * Set when the hub runs inside Tomcat (src/server/hosted): requests then come from the
+   * webapp's launcher, which is who is trusted, and the port is a private one picked by the OS.
+   */
+  hosted?: HostedServer;
 }
 
 const MIME: Record<string, string> = {
@@ -70,7 +77,8 @@ export function startServer(hub: Hub, uiDir: string, opts: ServerOptions): Promi
       return { status: 400, body: { errors: [{ path: 'sessionsDir', message: `Cannot use this folder: ${(err as Error).message}` }] } };
     }
     saveConfig(opts.configFile, config);
-    return { status: 200, body: { config, restartNeeded: config.port !== port } };
+    // Inside Tomcat the port setting is not used, so changing it needs no restart.
+    return { status: 200, body: { config, restartNeeded: !opts.hosted && config.port !== port } };
   };
   const hosts = new Set([`localhost:${port}`, `127.0.0.1:${port}`]);
   const origins = new Set([...hosts].map((h) => `http://${h}`));
@@ -86,11 +94,21 @@ export function startServer(hub: Hub, uiDir: string, opts: ServerOptions): Promi
     return origin === undefined || origins.has(origin);
   };
 
+  // The live channel as Server-Sent Events, for where a WebSocket cannot connect (inside Tomcat).
+  const live = new LiveStreams();
+
   const server = createServer(async (req, res) => {
     try {
-      if (!trusted(req)) return json(res, 403, { error: 'Forbidden' });
+      if (!opts.hosted && !trusted(req)) return json(res, 403, { error: 'Forbidden' });
       const url = new URL(req.url ?? '/', `http://${req.headers.host}`);
       const path = url.pathname;
+      // Inside Tomcat: who may come in, and the requests that are about hosting itself.
+      if (opts.hosted?.before(req, res, url, json)) return;
+      if (path === '/api/host' && req.method === 'GET') return json(res, 200, { hosted: false, local: true });
+
+      if (path === '/api/live' && req.method === 'GET') {
+        return live.open(req, res, [JSON.stringify({ type: 'status', status: hub.status() } satisfies ServerMessage)]);
+      }
 
       if (path === '/api/status' && req.method === 'GET') return json(res, 200, hub.status());
       if (path === '/api/sessions' && req.method === 'GET') return json(res, 200, hub.store.list());
@@ -109,6 +127,10 @@ export function startServer(hub: Hub, uiDir: string, opts: ServerOptions): Promi
       }
 
       if (path === '/api/config' && req.method === 'GET') {
+        if (opts.hosted) {
+          const editable = opts.hosted.editable(opts.configFile);
+          return json(res, 200, { ...editable, runningPort: editable.config.port });
+        }
         return json(res, 200, { ...editableConfig(opts.configFile), runningPort: port });
       }
       if (path === '/api/config' && req.method === 'PUT') {
@@ -158,7 +180,7 @@ export function startServer(hub: Hub, uiDir: string, opts: ServerOptions): Promi
 
       // Suggestions for the setup guide: Tomcat installs, Postgres logs, JDKs, WAR build folders.
       if (path === '/api/setup/detect' && req.method === 'GET') {
-        return json(res, 200, detectSetup());
+        return json(res, 200, detectSetup(opts.hosted?.detectOptions()));
       }
 
       if (path === '/api/markers' && req.method === 'POST') {
@@ -192,7 +214,8 @@ export function startServer(hub: Hub, uiDir: string, opts: ServerOptions): Promi
   const wss = new WebSocketServer({ noServer: true });
   const clients = new Set<WebSocket>();
   server.on('upgrade', (req, socket, head) => {
-    if (!trusted(req) || req.url !== '/ws') {
+    // Inside Tomcat nothing can open a WebSocket through the launcher; the UI uses /api/live.
+    if (opts.hosted || !trusted(req) || req.url !== '/ws') {
       socket.destroy();
       return;
     }
@@ -207,6 +230,7 @@ export function startServer(hub: Hub, uiDir: string, opts: ServerOptions): Promi
   const broadcast = (msg: ServerMessage) => {
     const raw = JSON.stringify(msg);
     for (const ws of clients) if (ws.readyState === ws.OPEN) ws.send(raw);
+    live.send(raw);
   };
 
   // Events are batched so a burst of log lines becomes one frame, not hundreds.

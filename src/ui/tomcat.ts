@@ -1,5 +1,6 @@
 import type { AppFolder, CommandRun, DeleteItem, KeepPreview, LaunchWay, ScriptKind, ScriptRun, StartCommandInfo, StartStep, TomcatState, WarInfo, WebappAction, WebappInfo } from '../shared/tomcat';
 import { $, fmtBytes, h, type Child } from './dom';
+import { confirmStopOwnTomcat, hostedNote, onHubMachine, SELF_WHY } from './hosted';
 import { closeSettings, openSettings, settingsOpen } from './settings';
 
 /**
@@ -97,6 +98,8 @@ function revealButton(target: { file: string } | { from: AppFolder; name?: strin
     });
   }, { title });
   b.classList.add('btn-ghost');
+  // It opens a window on the hub's machine: no use from another computer (hub inside Tomcat).
+  b.hidden = !onHubMachine();
   return b;
 }
 
@@ -155,9 +158,12 @@ const webappAction = (app: WebappInfo, action: WebappAction) =>
 
 const scriptAction = (kind: ScriptKind, only = false) =>
   act(`script:${kind}`, async () => {
+    // Debug Hub running inside this Tomcat: stopping it stops this page too, so ask first.
+    const self = kind === 'stop' && !!T.state?.hosted;
+    if (self && !(await confirmStopOwnTomcat())) return undefined;
     // The output panel and the start steps show how it went.
-    await api(`/api/tomcat/server/${kind}`, kind === 'start' ? { only } : {});
-    return undefined;
+    await api(`/api/tomcat/server/${kind}${self ? '?self=1' : ''}`, kind === 'start' ? { only } : {});
+    return self ? 'Stopping Tomcat, and Debug Hub with it. Start Tomcat yourself to get this page back.' : undefined;
   });
 
 const runCommand = (c: StartCommandInfo) =>
@@ -264,10 +270,14 @@ function serverCard(s: TomcatState): HTMLElement {
   const row = (kind: ScriptKind) => {
     const way = s.launch[kind];
     const run = s.scripts[kind];
-    const busy = T.busy.has(`script:${kind}`) || !!run?.running || (kind === 'start' && seqRunning);
+    // Debug Hub runs inside this Tomcat: it is running, so there is nothing to start.
+    const ownRunning = kind === 'start' && !!s.hosted;
+    const busy = T.busy.has(`script:${kind}`) || !!run?.running || (kind === 'start' && seqRunning) || ownRunning;
     const label = kind === 'start' ? 'Start Tomcat' : 'Stop Tomcat';
     const what = way.how === 'script' ? way.path : way.how === 'tomcat' ? `Tomcat’s ${fileName(way.path ?? '')}` : '';
-    const why = run?.running
+    const why = ownRunning
+      ? 'This Tomcat is running: Debug Hub runs inside it'
+      : run?.running
       ? 'The last run has not finished yet'
       : kind === 'start' && seqRunning
         ? 'Tomcat is being started'
@@ -294,7 +304,7 @@ function serverCard(s: TomcatState): HTMLElement {
   const tools = mgr.configured
     ? h('span', { class: `collector ${mgr.ok ? 'connected' : 'off'}`, title: mgr.error ?? s.settings.managerUrl }, mgr.ok ? 'Manager connected' : 'Manager unreachable')
     : null;
-  const body: Child[] = [row('start'), row('stop'), launchDetails(s), ...problemNotes(['startScript', 'stopScript'])];
+  const body: Child[] = [hostedNote(s), row('start'), row('stop'), launchDetails(s), ...problemNotes(['startScript', 'stopScript'])];
   const l = s.launch;
   if (l.start.how === 'none' && l.stop.how === 'none' && !l.home) {
     body.push(missing('Set the Tomcat folder (CATALINA_HOME) to start and stop Tomcat with its own startup and shutdown scripts, or add your own scripts, in ', settingsLink(), '.'));
@@ -410,12 +420,15 @@ function webappRow(s: TomcatState, app: WebappInfo): HTMLElement {
   const busy = T.busy.has(`app:${app.name}`);
   const mgr = s.manager;
   const actions: HTMLElement[] = [];
-  const own = isManagerApp(s, app);
+  // Debug Hub's own webapp (when it runs inside this Tomcat) is guarded like the Manager's.
+  const self = app.self === true && app.state !== 'disabled';
+  const own = isManagerApp(s, app) || self;
+  const ownWhy = self ? SELF_WHY : 'This is the Manager itself';
   if (mgr.configured && app.state !== 'disabled') {
     const why = !mgr.ok ? 'The Tomcat Manager cannot be reached' : undefined;
     if (app.state === 'running') {
-      actions.push(button('Reload', () => void webappAction(app, 'reload'), { disabled: busy || !mgr.ok, title: why ?? 'Restart it, reloading classes and config' }));
-      actions.push(button('Stop', () => void webappAction(app, 'stop'), { disabled: busy || !mgr.ok || own, title: own ? 'This is the Manager itself' : why }));
+      actions.push(button('Reload', () => void webappAction(app, 'reload'), { disabled: busy || !mgr.ok || self, title: self ? SELF_WHY : (why ?? 'Restart it, reloading classes and config') }));
+      actions.push(button('Stop', () => void webappAction(app, 'stop'), { disabled: busy || !mgr.ok || own, title: own ? ownWhy : why }));
     } else if (app.state === 'stopped') {
       actions.push(button('Start', () => void webappAction(app, 'start'), { disabled: busy || !mgr.ok, title: why }));
     }
@@ -427,7 +440,7 @@ function webappRow(s: TomcatState, app: WebappInfo): HTMLElement {
     actions.push(
       button('Disable', () => void webappAction(app, 'disable'), {
         disabled: busy || noDir || own,
-        title: own ? 'This is the Manager itself' : noDir ? 'Set a folder for disabled webapps in Settings › Tomcat' : 'Move it out of webapps so Tomcat forgets it',
+        title: own ? ownWhy : noDir ? 'Set a folder for disabled webapps in Settings › Tomcat' : 'Move it out of webapps so Tomcat forgets it',
       }),
     );
   }
@@ -436,17 +449,19 @@ function webappRow(s: TomcatState, app: WebappInfo): HTMLElement {
       button('Delete…', () => void openDelete(app), {
         danger: true,
         disabled: busy || (own && app.state !== 'disabled'),
-        title: own && app.state !== 'disabled' ? 'This is the Manager itself' : `Delete its files from the ${app.state === 'disabled' ? 'disabled' : 'webapps'} folder for good`,
+        title: own && app.state !== 'disabled' ? ownWhy : `Delete its files from the ${app.state === 'disabled' ? 'disabled' : 'webapps'} folder for good`,
       }),
     );
   }
   const kinds = [app.hasWar && 'WAR', app.hasDir && 'folder', app.external && 'outside webapps'].filter(Boolean) as string[];
-  const linkable = mgr.origin && app.state === 'running';
-  const path = linkable ? h('a', { href: mgr.origin + app.path, target: '_blank', rel: 'noopener', class: 'tm-path', title: `Open ${mgr.origin}${app.path}` }, app.path) : h('span', { class: 'tm-path' }, app.path);
+  // Inside this Tomcat, the page itself is served from where the webapps are.
+  const origin = mgr.origin ?? (s.hosted ? location.origin : null);
+  const linkable = origin && (app.state === 'running' || (!mgr.ok && app.state === 'deployed' && !!s.hosted));
+  const path = linkable ? h('a', { href: origin + app.path, target: '_blank', rel: 'noopener', class: 'tm-path', title: `Open ${origin}${app.path}` }, app.path) : h('span', { class: 'tm-path' }, app.path);
   return h(
     'div',
     { class: `tm-row${busy ? ' busy' : ''}` },
-    h('div', { class: 'tm-name' }, h('b', {}, app.name), ...kinds.map((k) => h('span', { class: 'tm-tag' }, k))),
+    h('div', { class: 'tm-name' }, h('b', {}, app.name), ...kinds.map((k) => h('span', { class: 'tm-tag' }, k)), self ? h('span', { class: 'tm-tag self', title: SELF_WHY }, 'Debug Hub') : null),
     path,
     h('div', {}, stateBadge(app.state), app.sessions ? h('span', { class: 'muted tm-sessions' }, `${app.sessions} session${app.sessions === 1 ? '' : 's'}`) : null),
     h('span', { class: 'muted', title: app.modified ? new Date(app.modified).toLocaleString() : '' }, [ago(app.modified), fmtBytes(app.bytes)].filter(Boolean).join(' · ')),

@@ -12,6 +12,7 @@
   },
   "scripts": {
     "build": "node scripts/build.mjs",
+    "build:war": "node scripts/build.mjs && node scripts/build-war.mjs",
     "start": "node scripts/build.mjs && node dist/cli.js",
     "doctor": "node scripts/build.mjs && node dist/cli.js doctor",
     "demo": "node examples/demo-app.mjs",

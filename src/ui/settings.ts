@@ -7,6 +7,7 @@ import { chromeArgs, chromeCommandLines, typicalChromePath } from '../shared/chr
 import type { HubStatus } from '../shared/types';
 import { CHROME_LAUNCH_EVENT, chromeButton, chromeLaunchNote } from './chrome';
 import { $, fmtBytes, h, type Child } from './dom';
+import { decorateSettings, type Detected } from './hosted';
 import { guideOpen, openSetupGuide } from './setupguide';
 
 /**
@@ -1590,6 +1591,9 @@ function render(): void {
   );
   cards.forEach((c) => io.observe(c));
   navLinks[0]?.classList.add('active');
+
+  // Inside Tomcat: hints on the settings detected from it (src/ui/hosted.ts). Nothing otherwise.
+  decorateSettings({ root: root(), detected: (L as Loaded & { detected?: Detected }).detected, slots: S.errorSlots, getValue: getPath, derived: S.derived });
 
   if (L.error) renderBanner({ kind: 'warn', text: `The settings file could not be read, so defaults are shown. Saving replaces it. ${L.error}` });
   restartBanner();

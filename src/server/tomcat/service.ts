@@ -9,6 +9,8 @@ import { isTomcatEntryStart, parseTomcatEntry } from '../parsers/tomcat';
 import { deleteApp, planDelete } from './delete';
 import { findKeepSource, findKeptFiles, readKeptFiles, warHas, writeWarWithKept } from './keep';
 import { appParams, managerCommand, managerList, managerOrigin, type Fetch, type ManagerApp } from './manager';
+import { hosted } from '../hosted/info';
+import { isSelfWebapp, ownTomcat, SELF_REFUSED, selfPath } from '../hosted/self';
 import { CommandRunner } from './commands';
 import { launchPlan, thisLaunchMachine, type LaunchMachine } from './launch';
 import { reveal } from './reveal';
@@ -298,9 +300,14 @@ export class TomcatService {
       apps.push({ name: m.name, path: m.path, hasWar: false, hasDir: false, modified: null, bytes: null, state: m.state, sessions: m.sessions, external: true });
     }
 
+    // Running inside this Tomcat: the hub's own webapp is marked, so the page can guard it.
+    const host = ownTomcat(this.cfg) ? hosted() : null;
+    if (host) for (const a of apps) if (a.path === selfPath(host)) a.self = true;
+
     const names = [...webapps, ...disabled].map((a) => a.name);
     const snap = (r: CommandRun | null) => (r ? this.commands.snapshot(r) : Promise.resolve(null));
     return {
+      ...(host ? { hosted: { path: selfPath(host), server: host.serverInfo } } : {}),
       settings: {
         webappsDir: t.webappsDir,
         disabledDir: t.disabledDir,
@@ -342,6 +349,7 @@ export class TomcatService {
     if (problem) throw new TomcatError(`Not a webapp name: ${problem}`);
     const path = contextPath(name);
     const mgr = this.cfg.tomcat.manager;
+    if ((action === 'stop' || action === 'reload' || action === 'disable') && isSelfWebapp(this.cfg, { name })) throw new TomcatError(SELF_REFUSED, 409);
 
     if (action === 'start' || action === 'stop' || action === 'reload') {
       if (!mgr.url) throw new TomcatError('Starting and stopping single webapps needs the Tomcat Manager. Set it up in Settings › Tomcat, or use Disable and Enable.');
@@ -421,6 +429,7 @@ export class TomcatService {
     if (from === 'webapps' && this.isManagerApp(name)) {
       throw new TomcatError(`${name} is the Tomcat Manager that Debug Hub uses; it cannot be deleted from here.`);
     }
+    if (from === 'webapps' && isSelfWebapp(this.cfg, { name })) throw new TomcatError(SELF_REFUSED, 409);
     const path = contextPath(name);
     const mgr = this.cfg.tomcat.manager;
     let stopped = false;
@@ -551,6 +560,9 @@ export class TomcatService {
    * starting at all is checked first, so nothing is started for a Start that cannot work.
    */
   async startTomcat(only = false): Promise<StartSequence> {
+    if (ownTomcat(this.cfg)) {
+      throw new TomcatError('This Tomcat is already running: Debug Hub runs inside it. Start commands can still be run one at a time with Run.', 409);
+    }
     const current = this.sequence?.state;
     if (current?.running) {
       const at = current.steps.findIndex((s) => s.status === 'running');
