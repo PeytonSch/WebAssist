@@ -506,6 +506,12 @@ main {
 .row.lvl-debug .text { color: var(--muted); }
 .row.sel, .row.sel:hover { background: var(--selected); box-shadow: inset 0 0 0 1px var(--accent); }
 .row.is-related { background: var(--accent-soft); box-shadow: inset 3px 0 0 var(--accent); }
+/* A highlighted route (routehl.ts): tinted in the colour the user chose, with a bar at the edge. */
+.row.hl { background: color-mix(in srgb, var(--hl) 14%, var(--surface)); box-shadow: inset 4px 0 0 var(--hl); }
+.row.hl:hover { background: color-mix(in srgb, var(--hl) 22%, var(--surface)); }
+.row.hl .text .route { color: color-mix(in srgb, var(--hl) 70%, var(--text)); }
+.row.hl.sel { box-shadow: inset 4px 0 0 var(--hl), inset 0 0 0 1px var(--accent); }
+.row.hl.is-related { box-shadow: inset 4px 0 0 var(--hl), inset 0 0 0 1px var(--accent); }
 
 .c-time {
   font: 12px var(--mono);
@@ -577,6 +583,46 @@ main {
 .route-fact { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; }
 .route-fact code { font: 12px var(--mono); }
 .route-fact .btn-sm { height: 24px; padding: 0 8px; font-size: 11.5px; }
+.hl-btn { display: inline-flex; align-items: center; gap: 6px; }
+.hl-btn:not(.on) .hl-dot { background: conic-gradient(#e11d48, #d99a06, #16a34a, #0284c7, #c026d3, #e11d48); }
+.hl-btn.on { border-color: color-mix(in srgb, var(--sw) 55%, var(--border)); background: color-mix(in srgb, var(--sw) 12%, var(--surface)); }
+.hl-dot { display: inline-block; flex: none; width: 10px; height: 10px; border-radius: 50%; background: var(--sw); }
+
+.hl-picker {
+  position: fixed;
+  z-index: 60;
+  width: 280px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  box-shadow: 0 16px 40px rgba(16, 24, 40, 0.2);
+  animation: confirm-in 0.12s ease-out;
+}
+.hl-title { font-weight: 600; overflow-wrap: anywhere; }
+.hl-title code { font: 12px var(--mono); }
+.hl-note { margin: 4px 0 12px; color: var(--text-2); font-size: 12px; line-height: 1.45; }
+.hl-swatches { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; }
+.hl-swatch {
+  aspect-ratio: 1;
+  border: 2px solid transparent;
+  border-radius: 9px;
+  background: var(--sw);
+  cursor: pointer;
+  box-shadow: inset 0 0 0 2px var(--surface);
+}
+.hl-swatch:hover { transform: scale(1.06); }
+.hl-swatch.on, .hl-swatch:focus-visible { border-color: var(--sw); outline: none; box-shadow: inset 0 0 0 2px var(--surface), 0 0 0 2px color-mix(in srgb, var(--sw) 30%, transparent); }
+.hl-custom-wrap { position: relative; display: grid; place-items: center; border: 1px dashed var(--border-strong); border-radius: 9px; color: var(--text-2); font-size: 10.5px; cursor: pointer; overflow: hidden; }
+.hl-custom-wrap:hover { border-color: var(--accent); color: var(--accent); }
+.hl-custom { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; }
+.hl-actions { display: flex; justify-content: flex-end; margin-top: 12px; }
+.hl-others { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--border); max-height: 180px; overflow-y: auto; }
+.hl-sub { margin-bottom: 6px; color: var(--muted); font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; }
+.hl-other { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.hl-other code { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 11.5px var(--mono); }
+.hl-x { width: 24px; height: 24px; }
+@media (prefers-reduced-motion: reduce) { .hl-picker { animation: none; } .hl-swatch:hover { transform: none; } }
 .linked { flex: none; color: var(--accent); display: inline-flex; }
 
 .pill {

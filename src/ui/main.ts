@@ -15,6 +15,7 @@ import { closeMetrics, initMetrics, metricsChanged, metricsOpen, openMetrics } f
 import { onRegistryMessage } from './registry';
 import { initSettings, openSettings, settingsOpen, updateSettingsStatus } from './settings';
 import { firstOwnRef, initSource, linkSources, openSource, setSourceContext, showError } from './source';
+import { highlightOf, onHighlightsChange, openHighlightPicker } from './routehl';
 import { durationOf, failedOf, groupOf, isSender, isStatic, levelOf, RANK, resOf, ridOf, routeWith, statusOf, typeOf, webappOf, type Group, type Row } from './rows';
 import { initTitlebar } from './titlebar';
 import { closeTomcat, initTomcat, onWarNotice, openTomcat, syncWarNotices, tomcatOpen } from './tomcat';
@@ -363,7 +364,29 @@ function routeFact(row: Row): HTMLElement | null {
   return h('span', { class: 'route-fact' },
     h('code', {}, route.template),
     route.title ? h('span', { class: 'route-rest' }, route.title) : null,
-    only);
+    only,
+    highlightButton(route.template));
+}
+
+/** Highlight: pick a colour for this route on the timeline. Shows the colour once chosen. */
+function highlightButton(template: string): HTMLElement {
+  const color = highlightOf(template);
+  const b = h('button', {
+    class: `btn btn-sm hl-btn${color ? ' on' : ''}`,
+    type: 'button',
+    'aria-haspopup': 'dialog',
+    title: color ? `Highlighted on the timeline. Change or remove the colour` : `Make ${template} requests stand out on the timeline in a colour`,
+    style: color ? `--sw: ${color}` : null,
+  }, h('span', { class: 'hl-dot', 'aria-hidden': 'true' }), color ? 'Highlighted' : 'Highlight');
+  b.dataset.hlTemplate = template;
+  b.onclick = () => openHighlightPicker(b, template);
+  return b;
+}
+
+/** A highlight changed: the timeline and the detail panel's button follow. */
+function highlightsChanged(): void {
+  for (const b of detail.querySelectorAll<HTMLElement>('.hl-btn')) b.replaceWith(highlightButton(b.dataset.hlTemplate ?? ''));
+  renderList();
 }
 
 function linkIcon(): Node {
@@ -400,7 +423,10 @@ function renderRow(r: Row): HTMLElement {
   const cls = ['row', `lvl-${lvl}`];
   if (r === state.selected) cls.push('sel');
   else if (state.relatedKeys.has(r.key)) cls.push('is-related');
-  return h('div', { class: cls.join(' '), 'data-key': r.key },
+  const route = groupOf(r) === 'network' ? routeOf(r) : null;
+  const hl = route ? highlightOf(route.template) : null;
+  if (hl) cls.push('hl');
+  return h('div', { class: cls.join(' '), 'data-key': r.key, style: hl ? `--hl: ${hl}` : null },
     h('span', { class: 'c-time' }, clock(r.ev.ts)),
     h('span', { class: 'c-src' }, sourceBadge(r.ev.source)),
     h('span', { class: 'c-main' }, ...mainCell(r)),
@@ -1441,6 +1467,7 @@ function init(): void {
   renderOrder();
   syncPresetSelect();
   renderStatus();
+  onHighlightsChange(highlightsChanged);
 
   viewport.addEventListener('scroll', () => {
     const atEdge = atNewest();
