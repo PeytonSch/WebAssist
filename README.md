@@ -169,7 +169,14 @@ opens the menu, and the top bar drags the window (double-click to maximize).
   path templates are used instead (which also catches IDs that look like words, such as a user
   name), and the tooltip names the operation. Search `route:user/id` for every request with that
   route, or `route:/user/id/{id}` for one exact template; **Only this route** in the detail panel
-  does the latter.
+  does the latter. **Highlight** beside it picks a colour for the route (eight that read on both
+  themes, or any colour): its requests, from the browser, the API client and Tomcat's access log,
+  are tinted in it with a bar at the edge, so they stand out as they come in. The picker also
+  lists the other highlighted routes, to remove them. Highlights are kept in this browser.
+- A request's details start with **Response body in JSON viewer** (and **Request body**, when
+  that is JSON), above Find in event, so a body opens without scrolling down to it; a body that
+  is not JSON gets a button that scrolls to it. **Compare…** puts the response body in the JSON
+  compare view.
 - The session menu switches between the live session and saved ones.
 - Shortcuts: `/` search, `M` marker, `J`/`K` or arrows to move, `E` errors only, `F` follow,
   `O` newest/oldest first, `R` reset filters, `Ctrl+F` find in the selected event, `V` JSON
@@ -272,7 +279,8 @@ selected). It opens full-window over the timeline; `Esc` or **Back** returns to 
   so `price` typed at the top offers `data.orders[*].items[*].price` and `..price`. `↑` `↓` choose,
   `Tab` or `Enter` take one, `Esc` closes the list. A path that finds nothing from the top is
   looked for at any depth instead (`address.city` finds `data.customer.address.city`), and the
-  status says so.
+  status says so. `Ctrl+L` (`Cmd+L` on a Mac) or `P` puts the caret in Path.
+- **Compare…** opens the JSON compare view with this document on the left (see below).
 - **Table** shows any array (by default the Path result, the selected one, or the first array
   of objects in the body): objects get a column per key, arrays a column per position (`[0]`,
   `[1]`…), plain values a value column. A Path with several arrays, like `orders[*].items`,
@@ -286,6 +294,20 @@ Numbers are shown exactly as sent, so 64-bit IDs are not rounded (they are marke
 When a body was cut off at the body size limit, the viewer shows what was captured, says so,
 and marks the values that were cut off; raise "Body size limit" in Settings to capture more.
 Text that is not valid JSON is shown as captured, with the position of the error marked.
+
+
+### JSON compare
+
+**Compare…** in the JSON viewer or a request's details opens two JSON documents side by side,
+read-only. The other side is pasted, or loaded from the recent response and request bodies on
+the timeline or the documents opened in the JSON viewer; `Ctrl+Enter` compares. Both are
+pretty-printed the same way, with keys sorted (**Sort keys**, on by default), so formatting
+and key order are not differences. Changed lines are marked, and inside them the words that
+differ; **Only changes** folds away unchanged stretches (a click opens one). On the left, every
+value that differs is listed by path (`$.items[6].price: 25.5 → 99`, added, removed); a click
+shows it. Array items are matched up, so one inserted at the front is one addition. `N` / `P`
+(or the arrows) step through the differences. A side that is not valid JSON is compared as
+text.
 
 ## API client
 
@@ -356,20 +378,33 @@ The **Tomcat** button in the top bar (or `#tomcat`) opens a page for running Tom
 Hub. Set it up under Settings → Tomcat server; the page says what is missing.
 
 - **Server.** Start Tomcat and Stop Tomcat run your own scripts, in the script's folder, or
-  without them Tomcat's own `bin/startup.bat` and `bin/shutdown.bat` (`.sh` elsewhere), the
-  traditional way: with `CATALINA_HOME` set to the Tomcat folder (by default the folder above
-  `webapps`), `CATALINA_BASE` to the folder above `webapps` when that has a `conf` folder, and
-  `JAVA_HOME` to the Java folder if one is set. On Windows, Tomcat then opens in its own
-  console window, as it does from Explorer. The page says which way each button runs and what
-  is missing (on Windows, `startup.bat` needs `JAVA_HOME` or `JRE_HOME`). The last run's output
-  and exit code are shown, and the output also goes on the timeline as Tomcat events. Debug Hub
-  does not wait for the script: one that keeps Tomcat in the foreground shows as still running,
-  and keeps running when Debug Hub closes.
+  without them Tomcat's own `bin/catalina.bat run` and `bin/shutdown.bat` (`.sh` elsewhere):
+  with `CATALINA_HOME` set to the Tomcat folder (by default the folder above `webapps`),
+  `CATALINA_BASE` to the folder above `webapps` when that has a `conf` folder, and `JAVA_HOME`
+  to the Java folder if one is set. `catalina run` keeps Tomcat in the foreground, without a
+  console window of its own: what it prints is in the **Console** below. The page says which
+  way each button runs and what is missing (on Windows, `catalina.bat` needs `JAVA_HOME` or
+  `JRE_HOME`). The output also goes on the timeline as Tomcat events (Tomcat's own log records
+  only when its log files are not already followed). Debug Hub does not wait for the script,
+  and Tomcat keeps running when Debug Hub closes.
+- **Restart** (beside Stop) runs Stop, waits until Tomcat has stopped (its process ends, or,
+  for a Tomcat started some other way, the Manager stops answering), ends it if it has not
+  stopped within a minute, and starts Tomcat again, without the start commands or Chrome.
+- **Console.** Tomcat's output like a terminal, with a tab each for Tomcat, its shutdown and
+  the start commands: Tomcat's log records coloured by level, errors and stack traces marked,
+  ANSI colours shown. **Wrap**, **Copy** and **Clear**; scrolled up, new output waits under
+  **Latest output**. The console can be made taller by dragging its corner. **End process**
+  ends a Tomcat that Stop does not get to stop. After Debug Hub restarts (an update), the
+  output of a Tomcat started before it is still shown.
+- **Sections fold.** Each section's title folds it away (remembered); Webapps, Disabled webapps
+  and WAR builds show how many they hold beside the title. A webapp being started, stopped or
+  reloaded shows a spinner beside its buttons until it is done.
 - **Start commands.** To bring up the whole dev setup at once, add start commands under
   Settings → Tomcat server. Start Tomcat runs them first, in order, then Tomcat, then Chrome if
   **Also start Chrome** is on. Each command runs in the system shell (`cmd.exe` on Windows,
-  `/bin/sh` elsewhere) in its folder (empty: the settings file's folder), detached, so it keeps
-  running when Debug Hub closes; its output goes on the timeline under its name. A command
+  `/bin/sh` elsewhere) in its folder (empty: the settings file's folder), in the background
+  without a window, so it keeps running when Debug Hub closes; its output goes on the timeline
+  under its name and in the Console. A command
   marked **wait** must finish, with exit code 0, before the next step, within 5 minutes; if it
   fails or takes longer, the sequence stops and Tomcat is not started (a command that timed out
   is left running). Use it for what Tomcat needs first, e.g. `net start postgresql-x64-16`.

@@ -16,6 +16,7 @@ import { onRegistryMessage } from './registry';
 import { initSettings, openSettings, settingsOpen, updateSettingsStatus } from './settings';
 import { firstOwnRef, initSource, linkSources, openSource, setSourceContext, showError } from './source';
 import { highlightOf, onHighlightsChange, openHighlightPicker } from './routehl';
+import { openJsonCompare, setCompareCandidates, type CompareCandidate } from './jsondiff';
 import { durationOf, failedOf, groupOf, isSender, isStatic, levelOf, RANK, resOf, ridOf, routeWith, statusOf, typeOf, webappOf, type Group, type Row } from './rows';
 import { initTitlebar } from './titlebar';
 import { closeTomcat, initTomcat, onWarNotice, openTomcat, syncWarNotices, tomcatOpen } from './tomcat';
@@ -806,6 +807,25 @@ function bodySource(row: Row, which: 'response' | 'request'): JsonSource | null 
   };
 }
 
+/**
+ * JSON bodies of recent requests on the timeline, newest first, for the compare view to load
+ * on either side.
+ */
+function compareCandidates(): CompareCandidate[] {
+  const out: CompareCandidate[] = [];
+  for (let i = state.rows.length - 1; i >= 0 && out.length < 40; i--) {
+    const row = state.rows[i];
+    if (row.ev.kind !== 'request') continue;
+    const res = bodySource(row, 'response');
+    const req = bodySource(row, 'request');
+    const what = `${row.ev.data.method ?? ''} ${shortUrl(row.ev.data.url)}`.trim();
+    const status = statusOf(row);
+    if (res) out.push({ group: 'Responses on the timeline', label: `${clock(row.ev.ts).slice(0, 8)}  ${what}${status != null ? ` · ${status}` : ''}`, src: { ...res, meta: [...res.meta, clock(row.ev.ts).slice(0, 8)] } });
+    if (req) out.push({ group: 'Request bodies on the timeline', label: `${clock(row.ev.ts).slice(0, 8)}  ${what}`, src: { ...req, meta: [...req.meta, clock(row.ev.ts).slice(0, 8)] } });
+  }
+  return out;
+}
+
 /** The text of a console or log message. */
 function messageText(row: Row): string | null {
   const d = row.ev.data;
@@ -884,6 +904,11 @@ function quickBodies(resJson: JsonSource | null, reqJson: JsonSource | null, res
   if (resJson) buttons.push(jsonButton('Response body', resJson, true));
   else if (resSec) buttons.push(jumpButton('Response body', resSec));
   if (reqJson) buttons.push(jsonButton('Request body', reqJson, !resJson));
+  if (resJson) {
+    const cmp = h('button', { type: 'button', class: 'btn btn-sm btn-ghost', title: 'Compare this response body with another, side by side' }, 'Compare…');
+    cmp.onclick = () => openJsonCompare({ left: resJson });
+    buttons.push(cmp);
+  }
   return buttons.length ? h('div', { class: 'd-quick' }, ...buttons) : null;
 }
 
@@ -1468,6 +1493,7 @@ function init(): void {
   syncPresetSelect();
   renderStatus();
   onHighlightsChange(highlightsChanged);
+  setCompareCandidates(compareCandidates);
 
   viewport.addEventListener('scroll', () => {
     const atEdge = atNewest();

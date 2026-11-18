@@ -12,6 +12,7 @@
 import { $, fmtBytes, h, type Child } from './dom';
 import { highlight, paint } from './highlight';
 import { completions, nestedFallback, type Suggestion } from './jsoncomplete';
+import { noteViewed, openJsonCompare } from './jsondiff';
 import {
   canTable, cellAt, cellOf, compareNodes, inlinePreview, isRecordTable, keyValueTable, describe, findTable, isContainer, jsonPath, jsPath, lossyNumber, parseJson, plural, preview,
   QueryError, runQuery, search, sizeOf, stringify, stringifyCapped, tableOf, walk,
@@ -1157,7 +1158,8 @@ function renderShell(): void {
   const copyAll = copyButton('Copy all', d.parsed.partial || d.parsed.error ? 'Copy the text as captured' : 'Copy the whole document, pretty-printed', () => exportText(d));
   copyAll.className = 'btn';
   const save = button('Download', `Save as ${d.src.fileName}`, () => download(exportText(d), d.src.fileName), 'btn');
-  const head = h('div', { class: 'jv-head' }, back, title, copyAll, save);
+  const compare = button('Compare…', 'Compare this document with another, side by side', () => openJsonCompare({ left: d.src }), 'btn');
+  const head = h('div', { class: 'jv-head' }, back, title, compare, copyAll, save);
 
   const modes = {
     tree: button('Tree', 'Tree view', () => setMode('tree'), 'jv-mode'),
@@ -1308,6 +1310,7 @@ function focusMain(): void {
 }
 
 function pushDoc(src: JsonSource): void {
+  noteViewed(src);
   V.stack.push(newDoc(src));
   showDoc();
 }
@@ -1327,6 +1330,7 @@ export function jsonViewerOpen(): boolean {
 }
 
 export function openJsonViewer(src: JsonSource): void {
+  noteViewed(src);
   V.stack = [newDoc(src)];
   if (!V.open) {
     V.open = true;

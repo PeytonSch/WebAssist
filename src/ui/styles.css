@@ -2887,3 +2887,126 @@ dialog.tm-deploy:has(.kf-list) { width: 680px; max-width: calc(100vw - 32px); }
   .mv-counter { min-width: 0; }
 }
 @media (prefers-reduced-motion: reduce) { .mv-flash { animation: none; } }
+
+/* ── JSON compare (jsondiff.ts) ─────────────────────────── */
+.dialog.jd {
+  width: min(1480px, calc(100vw - 32px));
+  height: min(920px, calc(100vh - 32px));
+  max-width: none;
+  max-height: none;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.dialog.jd:not([open]) { display: none; }
+.jd-head { display: flex; align-items: center; gap: 10px; padding: 14px 16px 12px 20px; border-bottom: 1px solid var(--border); flex: none; }
+.jd-head h2 { margin: 0; font-size: 15px; }
+.jd-icon { width: 30px; height: 30px; border-radius: 8px; display: grid; place-items: center; color: var(--accent); background: var(--accent-soft); flex: none; }
+.jd .spacer { flex: 1; }
+.jd-chips { display: flex; gap: 6px; flex-wrap: wrap; margin-left: 6px; }
+.jd-chip { padding: 1px 9px; border-radius: 999px; font-size: 12px; font-weight: 600; line-height: 20px; }
+.jd-chip.mod { color: var(--warn); background: var(--warn-soft); }
+.jd-chip.add { color: var(--ok); background: var(--ok-soft); }
+.jd-chip.del { color: var(--error); background: var(--error-soft); }
+.jd-chip.same { color: var(--ok); background: var(--ok-soft); }
+
+/* Input */
+.jd-inputs { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); gap: 10px; padding: 16px 20px; background: var(--bg); }
+.jd-side { display: flex; flex-direction: column; min-height: 0; min-width: 0; gap: 8px; }
+.jd-side-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.jd-src { flex: 1; min-width: 0; display: flex; gap: 8px; align-items: baseline; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 12.5px; }
+.jd-src span { color: var(--text-2); font: 11.5px var(--mono); }
+.jd-pick { max-width: 260px; height: 28px; font-size: 12px; }
+.jd-badge { flex: none; padding: 0 7px; border-radius: 5px; font-size: 10.5px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; line-height: 18px; }
+.jd-badge.a { color: var(--error); background: var(--error-soft); }
+.jd-badge.b { color: var(--ok); background: var(--ok-soft); }
+.jd-text {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  resize: none;
+  padding: 12px 14px;
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--text);
+  font: 12px/1.55 var(--mono);
+  tab-size: 2;
+  outline: none;
+}
+.jd-text:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.jd-status { font-size: 12px; min-height: 18px; }
+.jd-status.ok { color: var(--ok); }
+.jd-status.warn { color: var(--warn); }
+.jd-swap { align-self: center; width: 34px; height: 34px; border-radius: 50%; }
+.jd-foot { display: flex; align-items: center; gap: 8px; padding: 12px 16px 14px 20px; border-top: 1px solid var(--border); flex: none; font-size: 12px; }
+
+/* Result */
+.jd-toolbar { display: flex; align-items: center; gap: 14px; padding: 8px 16px 8px 20px; border-bottom: 1px solid var(--border); background: var(--surface-2); flex: none; flex-wrap: wrap; }
+.jd-check { font-size: 12.5px; }
+.jd-nav { display: flex; align-items: center; gap: 6px; }
+.jd-nav-label { min-width: 64px; text-align: center; color: var(--text-2); font-size: 12px; font-variant-numeric: tabular-nums; }
+.jd-result { flex: 1; min-height: 0; display: grid; grid-template-columns: 300px minmax(0, 1fr); }
+.jd-result.text { grid-template-columns: minmax(0, 1fr); }
+.jd-list { display: flex; flex-direction: column; min-height: 0; border-right: 1px solid var(--border); background: var(--surface); }
+.jd-list-head { display: flex; justify-content: space-between; padding: 12px 14px 8px; color: var(--muted); font-size: 11px; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; }
+.jd-items { overflow-y: auto; padding: 0 6px 10px; }
+.jd-list-empty { padding: 4px 14px; color: var(--text-2); font-size: 12.5px; }
+.jd-item { display: flex; gap: 8px; width: 100%; padding: 6px 8px; border: 0; border-radius: 7px; background: none; color: var(--text); text-align: left; cursor: pointer; }
+.jd-item:hover { background: var(--hover); }
+.jd-item:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.jd-item-kind { flex: none; width: 18px; height: 18px; border-radius: 5px; display: grid; place-items: center; font: 700 12px var(--mono); }
+.jd-item.changed .jd-item-kind { color: var(--warn); background: var(--warn-soft); }
+.jd-item.added .jd-item-kind { color: var(--ok); background: var(--ok-soft); }
+.jd-item.removed .jd-item-kind { color: var(--error); background: var(--error-soft); }
+.jd-item-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.jd-path { font: 11.5px var(--mono); color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.jd-vals { display: flex; gap: 6px; align-items: baseline; min-width: 0; font: 11px var(--mono); white-space: nowrap; overflow: hidden; }
+.jd-before { color: var(--error); text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--error) 50%, transparent); overflow: hidden; text-overflow: ellipsis; }
+.jd-after { color: var(--ok); overflow: hidden; text-overflow: ellipsis; }
+.jd-arrow { color: var(--muted); flex: none; }
+.jd-main { display: flex; flex-direction: column; min-height: 0; min-width: 0; }
+.jd-note { margin: 10px 16px 0; padding: 8px 12px; border-radius: 8px; background: var(--warn-soft); color: var(--warn); font-size: 12.5px; }
+.jd-cols { display: grid; grid-template-columns: 1fr 1fr; border-bottom: 1px solid var(--border); flex: none; }
+.jd-col-title { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 8px 14px; white-space: nowrap; overflow: hidden; font-size: 12.5px; }
+.jd-col-title + .jd-col-title { border-left: 1px solid var(--border); }
+.jd-col-title .muted { font: 11.5px var(--mono); overflow: hidden; text-overflow: ellipsis; }
+.jd-diff { flex: 1; min-height: 0; overflow: auto; outline: none; font: 12px/20px var(--mono); padding-bottom: 24px; }
+.jd-row { display: grid; grid-template-columns: 46px minmax(0, 1fr) 46px minmax(0, 1fr); min-height: 20px; }
+.jd-n { padding: 0 8px; text-align: right; color: var(--muted); user-select: none; font-size: 11px; }
+.jd-c { padding: 0 12px 0 6px; white-space: pre-wrap; overflow-wrap: anywhere; min-width: 0; }
+.jd-row > .jd-n:nth-child(3) { border-left: 1px solid var(--border); }
+.jd-c.none { background: repeating-linear-gradient(135deg, transparent 0 5px, color-mix(in srgb, var(--border) 60%, transparent) 5px 6px); }
+.jd-row.del > :nth-child(1), .jd-row.del > :nth-child(2), .jd-row.mod > :nth-child(1), .jd-row.mod > :nth-child(2) { background-color: color-mix(in srgb, var(--error) 10%, transparent); }
+.jd-row.add > :nth-child(3), .jd-row.add > :nth-child(4), .jd-row.mod > :nth-child(3), .jd-row.mod > :nth-child(4) { background-color: color-mix(in srgb, var(--ok) 11%, transparent); }
+.jd-row.current > .jd-n:nth-child(1) { box-shadow: inset 3px 0 0 var(--accent); }
+.jd-row.flash { animation: sec-flash 1.2s ease-out; }
+.jd-row > :nth-child(2) mark.jd-word { background: color-mix(in srgb, var(--error) 28%, transparent); color: inherit; border-radius: 3px; }
+.jd-row > :nth-child(4) mark.jd-word { background: color-mix(in srgb, var(--ok) 30%, transparent); color: inherit; border-radius: 3px; }
+.jd-key { color: var(--syn-key); }
+.jd-str { color: var(--syn-str); }
+.jd-num { color: var(--syn-num); }
+.jd-lit { color: var(--syn-kw); }
+.jd-punc { color: var(--muted); }
+.jd-fold {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+  height: 26px;
+  border: 0;
+  border-top: 1px dashed var(--border);
+  border-bottom: 1px dashed var(--border);
+  background: var(--surface-2);
+  color: var(--text-2);
+  font: 11.5px var(--sans);
+  cursor: pointer;
+}
+.jd-fold:hover { color: var(--accent); background: var(--accent-soft); }
+@media (max-width: 860px) {
+  .jd-result { grid-template-columns: minmax(0, 1fr); }
+  .jd-list { max-height: 30vh; border-right: 0; border-bottom: 1px solid var(--border); }
+  .jd-inputs { grid-template-columns: minmax(0, 1fr); }
+}
