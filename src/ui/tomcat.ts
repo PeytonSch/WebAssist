@@ -1,5 +1,7 @@
-import type { AppFolder, CommandRun, DeleteItem, KeepPreview, LaunchWay, ScriptKind, ScriptRun, StartCommandInfo, StartStep, TomcatState, WarInfo, WebappAction, WebappInfo } from '../shared/tomcat';
+import type { KeepComparePreview } from '../shared/keepmerge';
+import type { AppFolder, CommandRun, DeleteItem, LaunchWay, ScriptKind, ScriptRun, StartCommandInfo, StartStep, TomcatState, WarInfo, WebappAction, WebappInfo } from '../shared/tomcat';
 import { $, fmtBytes, h, type Child } from './dom';
+import { KeepFiles } from './keepfiles';
 import { closeSettings, openSettings, settingsOpen } from './settings';
 
 /**
@@ -649,49 +651,10 @@ async function openDelete(app: WebappInfo): Promise<void> {
 // ── Deploy dialog ───────────────────────────────────────
 
 /**
- * The file names to keep, for the checkbox: "config.yaml, config.js and log4j2.xml". A long list
- * is cut short ("a, b, c and 4 more"); the files found are listed below it anyway.
- */
-function nameList(names: string[], and = 'and'): string {
-  if (names.length > 4) return `${names.slice(0, 3).join(', ')} ${and} ${names.length - 3} more`;
-  return names.length > 1 ? `${names.slice(0, -1).join(', ')} ${and} ${names[names.length - 1]}` : (names[0] ?? '');
-}
-
-/**
- * The "Keep config.yaml, config.js and log4j2.xml" choice (names from Settings): which files the
- * deploy would carry over from the copy it replaces, and whether each replaces the build's own
- * or is added.
- */
-function keepSection(preview: KeepPreview, box: HTMLInputElement): Child[] {
-  const from = preview.source?.where === 'disabled' ? 'disabled copy' : 'deployed copy';
-  if (!preview.files.length) {
-    return preview.source ? [h('p', { class: 'muted' }, `No ${nameList(preview.patterns, 'or')} in the ${from} to keep.`)] : [];
-  }
-  const names = nameList(preview.patterns);
-  if (preview.problem) {
-    box.checked = false;
-    box.disabled = true;
-  }
-  const out: Child[] = [h('label', { class: 'check tm-check' }, box, ` Keep ${names} from the ${from}`)];
-  if (preview.problem) out.push(h('p', { class: 'warn' }, preview.problem));
-  out.push(
-    h(
-      'ul',
-      { class: `tm-keep-list${box.checked ? '' : ' off'}` },
-      ...preview.files.map((f) =>
-        h('li', {}, h('code', {}, f.path), h('span', { class: 'muted' }, f.inWar === true ? 'replaces the build’s' : f.inWar === false ? 'added' : '')),
-      ),
-    ),
-  );
-  if (preview.truncated) out.push(h('p', { class: 'muted' }, 'The search stopped early; there may be more.'));
-  if (box.checked) out.push(h('p', { class: 'muted' }, 'Written into the WAR before Tomcat sees it, so the webapp starts with them.'));
-  return out;
-}
-
-/**
  * Asks for the webapp name and explains what the deploy will replace. A disabled webapp of the
  * same name is brought back by the deploy; its old copy is deleted unless the box is unticked.
- * Local config files in the copy being replaced can be kept (Settings › Tomcat › Files to keep).
+ * Local config files in the copy being replaced (Settings › Tomcat › Files to keep) can each be
+ * kept, replaced by the build's, or merged with it: see keepfiles.ts.
  */
 async function openDeploy(war: WarInfo): Promise<void> {
   document.querySelector('dialog.tm-deploy')?.remove();
@@ -705,25 +668,22 @@ async function openDeploy(war: WarInfo): Promise<void> {
   input.value = war.target;
   const removeOld = h('input', { type: 'checkbox' }) as HTMLInputElement;
   removeOld.checked = true;
-  const keepBox = h('input', { type: 'checkbox' }) as HTMLInputElement;
-  keepBox.checked = true;
   // What can be kept, for the name it was loaded for; reloaded as the name is edited.
-  let keep: { name: string; preview: KeepPreview } | null = null;
+  const keep = new KeepFiles({ api, war, changed: () => update() });
   let keepTimer = 0;
   let keepSeq = 0;
   const loadKeep = async (name: string): Promise<void> => {
     const seq = ++keepSeq;
-    let preview: KeepPreview | null = null;
+    let preview: KeepComparePreview | null = null;
     try {
-      preview = await api<KeepPreview>(`/api/tomcat/keep?name=${encodeURIComponent(name)}&file=${encodeURIComponent(war.file)}`);
+      preview = await api<KeepComparePreview>(`/api/tomcat/keep/compare?name=${encodeURIComponent(name)}&file=${encodeURIComponent(war.file)}`);
     } catch {
       /* no choice offered; the deploy works without it */
     }
     if (seq !== keepSeq) return;
-    keep = preview ? { name, preview } : null;
+    keep.set(name, preview);
     update();
   };
-  const keepPaths = () => (keep && keepBox.checked && !keep.preview.problem ? keep.preview.files.map((f) => f.path) : []);
   const note = h('div', { class: 'tm-deploy-note' });
   const error = h('div', { class: 'field-error', role: 'alert' });
   const ok = h('button', { type: 'submit', class: 'btn btn-primary' }, 'Deploy') as HTMLButtonElement;
@@ -758,10 +718,9 @@ async function openDeploy(war: WarInfo): Promise<void> {
           h('p', { class: 'muted' }, removeOld.checked ? 'It is an older build of the same webapp.' : `It stays in the disabled folder, but cannot be enabled while ${name} is deployed.`),
         );
       }
-      const kept = !blocked && keep?.name === name ? keepSection(keep.preview, keepBox) : [];
-      if (kept.length) parts.push(h('div', { class: 'tm-keep' }, ...kept));
     }
     note.replaceChildren(...parts.filter((p): p is Node => !!p));
+    keep.show(!blocked && keep.name === name);
     ok.disabled = blocked;
   };
   input.addEventListener('input', () => {
@@ -771,7 +730,6 @@ async function openDeploy(war: WarInfo): Promise<void> {
     if (!nameProblem(name)) keepTimer = window.setTimeout(() => void loadKeep(name), 250);
   });
   removeOld.addEventListener('change', update);
-  keepBox.addEventListener('change', update);
   update();
   void loadKeep(war.target);
 
@@ -783,6 +741,7 @@ async function openDeploy(war: WarInfo): Promise<void> {
     h('label', { class: 'tm-deploy-label', for: 'tm-deploy-name' }, 'Deploy as'),
     input,
     note,
+    keep.el,
     error,
     h('div', { class: 'dialog-actions' }, cancel, ok),
   );
@@ -801,15 +760,17 @@ async function openDeploy(war: WarInfo): Promise<void> {
     try {
       const name = input.value.trim();
       // The name was just edited: find out what there is to keep for it before deploying.
-      if (keep?.name !== name) {
+      if (keep.name !== name) {
         clearTimeout(keepTimer);
         await loadKeep(name);
-        if (keep?.preview.files.length && keepBox.checked) {
+        if (keep.hasChoices) {
           ok.textContent = 'Deploy';
           return void update();
         }
       }
-      const body = { file: war.file, name, disabledCopy: removeOld.checked ? 'remove' : 'keep', keep: keepPaths() };
+      const tooLarge = keep.tooLarge();
+      if (tooLarge) throw new Error(tooLarge);
+      const body = { file: war.file, name, disabledCopy: removeOld.checked ? 'remove' : 'keep', ...keep.choices() };
       const { message } = await api('/api/tomcat/deploy', body);
       T.banner = { kind: 'info', text: message };
       dropNotice(war.file);

@@ -1,12 +1,28 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import { DEPLOY_BODY_LIMIT, type MergedInput } from '../../shared/keepmerge';
 import type { AppFolder, WebappAction } from '../../shared/tomcat';
 import type { TomcatService } from './service';
 import { TomcatError } from './webapps';
 
 type Json = (res: ServerResponse, status: number, body: unknown) => void;
-type ReadBody = (req: IncomingMessage) => Promise<string>;
+type ReadBody = (req: IncomingMessage, limit?: number) => Promise<string>;
 
 const ACTIONS: WebappAction[] = ['start', 'stop', 'reload', 'disable', 'enable'];
+
+/** The merged files of a deploy request: entries that are not a path with a text are refused. */
+function mergedInputs(v: unknown): MergedInput[] {
+  if (v === undefined || v === null) return [];
+  if (!Array.isArray(v)) throw new TomcatError('merged must be a list of { path, text }');
+  return v.map((m): MergedInput => {
+    if (!m || typeof m !== 'object' || typeof m.path !== 'string' || typeof m.text !== 'string') throw new TomcatError('Each merged file needs a path and a text');
+    return {
+      path: m.path,
+      text: m.text,
+      ...(typeof m.deployedHash === 'string' ? { deployedHash: m.deployedHash } : {}),
+      ...(typeof m.buildHash === 'string' ? { buildHash: m.buildHash } : {}),
+    };
+  });
+}
 
 /** Which folder to delete from; anything else is refused rather than guessed. */
 function folder(v: unknown): AppFolder {
@@ -26,8 +42,11 @@ const strings = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is
  *   POST /api/tomcat/server/stop             run the stop script, or Tomcat's bin/shutdown
  *   POST /api/tomcat/commands/<i>/run        { command } run start command i on its own
  *   POST /api/tomcat/runs/<id>/stop          stop a start command's run and what it started
- *   POST /api/tomcat/deploy                  { file, name, disabledCopy: "remove" | "keep", keep?: [relative paths] }
+ *   POST /api/tomcat/deploy                  { file, name, disabledCopy: "remove" | "keep", keep?: [relative paths],
+ *                                              merged?: [{ path, text, deployedHash?, buildHash? }] }
  *   GET  /api/tomcat/keep?name=&file=        files a deploy could keep from the copy it replaces
+ *   GET  /api/tomcat/keep/compare?name=&file=  the same, each compared with the new WAR's file (new settings…)
+ *   GET  /api/tomcat/keep/file?name=&file=&path=  both versions of one kept file as text, for merging
  *   GET  /api/tomcat/delete?name=&from=      what Delete would remove (from: webapps | disabled)
  *   POST /api/tomcat/delete                  { name, from, items: [names confirmed] }
  *   POST /api/tomcat/reveal                  { file } a watched WAR, { name, from } a webapp, { from } a folder
@@ -42,13 +61,19 @@ export async function tomcatRoute(
   readBody: ReadBody,
 ): Promise<boolean> {
   if (path !== '/api/tomcat' && !path.startsWith('/api/tomcat/')) return false;
-  const body = async () => {
-    const parsed = JSON.parse((await readBody(req)) || '{}');
+  const body = async (limit?: number) => {
+    const parsed = JSON.parse((await readBody(req, limit)) || '{}');
     return parsed && typeof parsed === 'object' ? (parsed as Record<string, unknown>) : {};
   };
   try {
     if (path === '/api/tomcat' && req.method === 'GET') return json(res, 200, await tomcat.state()), true;
     if (path === '/api/tomcat/wars' && req.method === 'GET') return json(res, 200, await tomcat.wars()), true;
+    if (req.method === 'GET' && (path === '/api/tomcat/keep/compare' || path === '/api/tomcat/keep/file')) {
+      const q = new URL(req.url ?? '', 'http://localhost').searchParams;
+      const name = (q.get('name') ?? '').trim();
+      if (path === '/api/tomcat/keep/compare') return json(res, 200, await tomcat.keepCompare(name, q.get('file') ?? undefined)), true;
+      return json(res, 200, await tomcat.mergeFile(name, q.get('file') ?? '', q.get('path') ?? '')), true;
+    }
     if (req.method === 'GET' && (path === '/api/tomcat/keep' || path === '/api/tomcat/delete')) {
       const q = new URL(req.url ?? '', 'http://localhost').searchParams;
       const name = (q.get('name') ?? '').trim();
@@ -74,9 +99,11 @@ export async function tomcatRoute(
     if (stop) return json(res, 200, { message: await tomcat.stopCommand(Number(stop[1])) }), true;
 
     if (path === '/api/tomcat/deploy') {
-      const b = await body();
+      // Merged files travel in the body, so this request alone may be large.
+      const b = await body(DEPLOY_BODY_LIMIT);
       const disabledCopy = b.disabledCopy === 'keep' ? 'keep' : 'remove';
-      return json(res, 200, { message: await tomcat.deploy(String(b.file ?? ''), String(b.name ?? '').trim(), disabledCopy, strings(b.keep)) }), true;
+      const message = await tomcat.deploy(String(b.file ?? ''), String(b.name ?? '').trim(), disabledCopy, strings(b.keep), mergedInputs(b.merged));
+      return json(res, 200, { message }), true;
     }
     if (path === '/api/tomcat/delete') {
       const b = await body();

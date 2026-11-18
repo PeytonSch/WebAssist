@@ -8,6 +8,8 @@ import { makeEvent } from '../normalize';
 import { isTomcatEntryStart, parseTomcatEntry } from '../parsers/tomcat';
 import { deleteApp, planDelete } from './delete';
 import { findKeepSource, findKeptFiles, readKeptFiles, warHas, writeWarWithKept } from './keep';
+import type { KeepComparePreview, MergedInput, MergeFile } from '../../shared/keepmerge';
+import { compareKept, mergedFiles, readMergeFile } from './merge';
 import { appParams, managerCommand, managerList, managerOrigin, type Fetch, type ManagerApp } from './manager';
 import { CommandRunner } from './commands';
 import { launchPlan, thisLaunchMachine, type LaunchMachine } from './launch';
@@ -58,10 +60,11 @@ function within(child: string, parent: string): boolean {
   return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
 }
 
-/** "config.yaml (replaced) and WEB-INF/classes/config.js (added)". */
-function keptSummary(r: RewriteResult): string {
-  const parts = [...r.replaced.map((p) => `${p} (replaced)`), ...r.added.map((p) => `${p} (added)`)];
-  return parts.length > 1 ? `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}` : parts[0];
+const andList = (parts: string[]) => (parts.length > 1 ? `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}` : (parts[0] ?? ''));
+
+/** "config.yaml (replaced) and WEB-INF/classes/config.js (added)", for the files that were not merged. */
+function keptSummary(r: RewriteResult, merged: Set<string> = new Set()): string {
+  return andList([...r.replaced.filter((p) => !merged.has(p)).map((p) => `${p} (replaced)`), ...r.added.filter((p) => !merged.has(p)).map((p) => `${p} (added)`)]);
 }
 
 /**
@@ -519,12 +522,48 @@ export class TomcatService {
     return preview;
   }
 
-  /** Reads the files to keep before the deploy replaces (and Tomcat deletes) the copy they are in. */
-  private async filesToKeep(name: string, webappsDir: string, keep: string[]): Promise<NewFile[]> {
+  /**
+   * The keep preview with each file compared to the new WAR's file of the same path: identical,
+   * only in the deployed copy, or different, and then which settings the build adds, drops and
+   * sets differently. The deploy dialog shows this so a merge is opened where it is worth it.
+   */
+  async keepCompare(name: string, file?: string): Promise<KeepComparePreview> {
+    const preview: KeepComparePreview = { ...(await this.keepPreview(name, file)), compare: {} };
+    if (!preview.source || !preview.files.length || preview.problem || !file || !this.watcher.get(file)) return preview;
+    try {
+      preview.compare = await compareKept(preview.source, file, preview.files);
+    } catch (err) {
+      preview.problem = `Cannot compare the files with ${basename(file)}: ${(err as Error).message}`;
+    }
+    return preview;
+  }
+
+  /** Both versions of one kept file, for the merge view. Only a path the search for kept files finds now. */
+  async mergeFile(name: string, file: string, path: string): Promise<MergeFile> {
+    if (!this.watcher.get(file)) throw new TomcatError('That WAR is not in a watched folder (or is gone).', 404);
+    const { webappsDir } = this.needFolders(false);
+    const problem = checkName(name);
+    if (problem) throw new TomcatError(problem);
+    const source = await findKeepSource(name, webappsDir, this.usableDisabledDir());
+    if (!source) throw new TomcatError(`There is no deployed copy of ${name} to merge with any more. Open the deploy dialog again.`, 409);
+    try {
+      return await readMergeFile(source, this.cfg.tomcat.preserveFiles, file, path);
+    } catch (err) {
+      if (err instanceof ZipError) throw new TomcatError(`Cannot read ${path}: ${err.message}`, 422);
+      throw err;
+    }
+  }
+
+  /**
+   * Reads the files to keep, and prepares the merged ones, before the deploy replaces (and
+   * Tomcat deletes) the copy they are in.
+   */
+  private async filesToKeep(name: string, webappsDir: string, keep: string[], merged: MergedInput[] = [], war = ''): Promise<NewFile[]> {
     const source = await findKeepSource(name, webappsDir, this.usableDisabledDir());
     if (!source) throw new TomcatError(`There is no deployed copy of ${name} to keep files from any more. Open the deploy dialog again.`, 409);
     try {
-      return await readKeptFiles(source, this.cfg.tomcat.preserveFiles, keep);
+      const kept = await readKeptFiles(source, this.cfg.tomcat.preserveFiles, keep);
+      return merged.length ? [...kept, ...(await mergedFiles(source, this.cfg.tomcat.preserveFiles, war, merged))] : kept;
     } catch (err) {
       if (err instanceof ZipError) throw new TomcatError(`Cannot read the files to keep from ${source.path}: ${err.message} Deploy without keeping files.`, 422);
       throw err;
@@ -626,13 +665,19 @@ export class TomcatService {
    * deploy brings it back with the new build and, unless asked to keep it, deletes the old
    * disabled copy: otherwise the same webapp would be listed as both deployed and disabled, and
    * enabling the old copy later could not work while the new one is deployed.
+   *
+   * `keep` are files taken from the copy being replaced as they are; `merged` are files whose
+   * content was merged from both (see merge.ts). Both are written into the WAR before Tomcat
+   * sees it. A path in both is merged.
    */
-  async deploy(file: string, name: string, disabledCopy: 'remove' | 'keep' = 'remove', keep: string[] = []): Promise<string> {
+  async deploy(file: string, name: string, disabledCopy: 'remove' | 'keep' = 'remove', keep: string[] = [], merged: MergedInput[] = []): Promise<string> {
     if (!this.watcher.get(file)) throw new TomcatError('That WAR is not in a watched folder (or is gone).', 404);
     const { webappsDir, disabledDir } = this.needFolders(false);
     const problem = checkName(name);
     if (problem) throw new TomcatError(problem);
-    const kept = keep.length ? await this.filesToKeep(name, webappsDir, keep) : [];
+    const mergedPaths = new Set(merged.map((m) => m.path));
+    keep = keep.filter((p) => !mergedPaths.has(p));
+    const kept = keep.length || merged.length ? await this.filesToKeep(name, webappsDir, keep, merged, file) : [];
     let rewrite = null as RewriteResult | null;
     const write = kept.length ? async (tmp: string) => void (rewrite = await writeWarWithKept(file, tmp, kept)) : undefined;
     const { replaced } = await deployWar(file, webappsDir, name, write);
@@ -642,12 +687,16 @@ export class TomcatService {
     }
     this.watcher.settle(file);
     const path = contextPath(name);
-    const keptNote = rewrite ? ` Kept ${keptSummary(rewrite)} from the deployed copy.` : '';
+    const keptPaths = rewrite ? [...rewrite.replaced, ...rewrite.added].filter((p) => !mergedPaths.has(p)) : [];
+    const keptNote =
+      (keptPaths.length ? ` Kept ${keptSummary(rewrite!, mergedPaths)} from the deployed copy.` : '') +
+      (rewrite && mergedPaths.size ? ` Wrote your merge of ${andList([...mergedPaths])}.` : '');
     this.note('info', `Deployed ${basename(file)} as ${name}.war (${path})${replaced ? ', replacing the previous build' : ''}.${keptNote}`, {
       webapp: name,
       action: 'deploy',
       war: file,
-      ...(rewrite ? { kept: [...rewrite.replaced, ...rewrite.added] } : {}),
+      ...(keptPaths.length ? { kept: keptPaths } : {}),
+      ...(rewrite && mergedPaths.size ? { merged: [...mergedPaths] } : {}),
     });
     return (
       `Deployed ${basename(file)} as ${name}.war. Tomcat ${replaced ? 'redeploys' : 'deploys'} ${path} within a few seconds.` +
