@@ -43,6 +43,10 @@ const viewJs = view.outputFiles[0].text.replace(/<\/script/gi, '<\\/script');
 const updateHtml = (await readFile('src/shell/update.html', 'utf8')).replace('/*__UPDATE_VIEW__*/', () => viewJs);
 for (const dir of ['dist/shell', 'dist/payload']) {
   await writeFile(join(dir, 'update.html'), updateHtml);
+  // The app icon for windows and the taskbar (src/shell/appicon.ts). build/icon*.png and
+  // build/icon.ico are drawn from build/icon.svg (the .ico's 16-32 px sizes on the pixel grid).
+  await cp('build/icon-512.png', join(dir, 'icon.png'));
+  await cp('build/icon.ico', join(dir, 'icon.ico'));
   await build({ ...node, entryPoints: ['src/shell/updatepreload.ts'], outfile: join(dir, 'update-preload.cjs'), format: 'cjs', external: ['electron'] });
 }
 

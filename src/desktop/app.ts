@@ -7,6 +7,7 @@ import {
   gitRunner, gitUpdatesEnabled, proxyFromPac, remoteHttpUrl, startGitUpdate, type FetchOptions, type GitUpdateStatus,
 } from '../shell/gitupdate';
 import type { ShellContext } from '../shell/main';
+import { appIcon } from '../shell/appicon';
 import { availableView, saveTheme, showUpdateWindow, themeOf } from '../shell/updatewindow';
 
 /**
@@ -39,6 +40,7 @@ export async function run(ctx: ShellContext): Promise<void> {
     minHeight: 560,
     show: false,
     title: 'Debug Hub',
+    icon: appIcon(),
     backgroundColor: nativeTheme.shouldUseDarkColors ? '#0b0d12' : '#f6f7f9',
     // The UI's top bar is the title bar (src/ui/titlebar.ts). On macOS the native traffic lights
     // stay, inset into it; elsewhere the UI draws its own window buttons and menu button.

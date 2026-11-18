@@ -1,6 +1,7 @@
 import { BrowserWindow, nativeTheme } from 'electron';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { appIcon } from './appicon';
 import { fileDiff, fetchNote, GIT_BRANCH, GIT_REMOTE, type GitRunner, type GitUpdateStatus, updateDetails } from './gitupdate';
 import type { DiffAnswer, UpdateAction, UpdateView } from './updatemodel';
 
@@ -40,6 +41,7 @@ export function showUpdateWindow(view: UpdateView, opts: UpdateWindowOptions = {
     minimizable: false,
     fullscreenable: false,
     title: 'Debug Hub update',
+    icon: appIcon(),
     backgroundColor: theme === 'dark' ? '#11141b' : '#ffffff',
     webPreferences: { preload: join(__dirname, 'update-preload.cjs'), contextIsolation: true, sandbox: true, spellcheck: false },
   });

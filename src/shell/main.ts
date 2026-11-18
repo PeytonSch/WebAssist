@@ -7,6 +7,7 @@ import {
   remoteHttpUrl, startGitUpdate, takeUpdateResult, updateLogFile, type FetchOptions, type GitRunner,
   type UpdateResult as GitUpdateResult,
 } from './gitupdate';
+import { appIcon, setAppIdentity } from './appicon';
 import { Updater, type PayloadInfo, type UpdateResult } from './updater';
 import { availableView, savedTheme, showUpdateWindow } from './updatewindow';
 
@@ -70,6 +71,7 @@ function createSplash(): BrowserWindow {
     show: false,
     center: true,
     title: 'Debug Hub',
+    icon: appIcon(),
     backgroundColor: nativeTheme.shouldUseDarkColors ? '#11141b' : '#ffffff',
     webPreferences: { preload: join(__dirname, 'preload.cjs'), contextIsolation: true, sandbox: true },
   });
@@ -162,6 +164,7 @@ async function reportGitUpdate(r: GitUpdateResult | null): Promise<void> {
 }
 
 async function main(): Promise<void> {
+  setAppIdentity();
   splash = createSplash();
   const shownAt = Date.now();
 
