@@ -19,6 +19,7 @@ import {
   type Variable,
 } from '../shared/apiclient';
 import { replayFromEvent, type Replay } from '../shared/replay';
+import { confirmDialog } from './confirm';
 import { $, fmtBytes, h, type Child } from './dom';
 import { bodyLang, highlight, paint } from './highlight';
 import { closeSettings, openSettings, settingsOpen } from './settings';
@@ -379,8 +380,19 @@ function draftOf(r: RequestDraft): RequestDraft {
   return structuredClone({ method: r.method, url: r.url, params: r.params, headers: r.headers, body: r.body, contentType: r.contentType, disabledDefaults: r.disabledDefaults });
 }
 
-function openSaved(r: SavedRequest): void {
-  if (dirty() && !confirm(`Discard unsaved changes to “${A.opened!.name}”?`)) return;
+/** Asks before unsaved changes to the open request are dropped. */
+function confirmDiscard(): Promise<boolean> {
+  return confirmDialog({
+    title: 'Discard unsaved changes?',
+    text: h('span', {}, 'Your changes to ', h('b', {}, A.opened?.name ?? 'this request'), ' have not been saved.'),
+    ok: 'Discard changes',
+    cancel: 'Keep editing',
+    danger: true,
+  });
+}
+
+async function openSaved(r: SavedRequest): Promise<void> {
+  if (dirty() && !(await confirmDiscard())) return;
   rememberOp();
   A.op = r.operation;
   A.draft = draftOf(r);
@@ -618,7 +630,17 @@ async function duplicate(r: SavedRequest): Promise<void> {
 }
 
 async function remove(r: SavedRequest): Promise<void> {
-  if (!confirm(`Delete the saved request “${r.name}”?`)) return;
+  const go = await confirmDialog({
+    title: 'Delete this saved request?',
+    text: r.folder ? h('span', {}, 'It is removed from the folder ', h('b', {}, r.folder), '.') : 'It is removed from your saved requests.',
+    subject: h('div', { class: 'api-confirm-req' },
+      h('div', { class: 'api-item-line' }, methodBadge(r.method), h('b', { class: 'api-name' }, r.name)),
+      h('div', { class: 'api-item-sub mono' }, r.url)),
+    note: 'This cannot be undone.',
+    ok: 'Delete request',
+    danger: true,
+  });
+  if (!go) return;
   try {
     await call(`/api/client/catalog/requests/${encodeURIComponent(r.id)}`, { method: 'DELETE' });
     if (A.opened?.id === r.id) A.opened = null;
@@ -928,12 +950,12 @@ function savedItems(): HTMLElement[] {
         h('span', { class: 'api-item-main' },
           h('span', { class: 'api-item-line' }, methodBadge(r.method), h('span', { class: 'api-name' }, r.name), active && dirty() ? h('span', { class: 'api-dirty', title: 'Unsaved changes' }, '●') : null),
           h('span', { class: 'api-item-sub mono' }, r.url)),
-        () => openSaved(r),
+        () => void openSaved(r),
         { cls: `api-item${active ? ' active' : ''}`, title: r.description || undefined },
       );
       const tools = h('span', { class: 'api-item-tools' },
-        button('▶', () => {
-          openSaved(r);
+        button('▶', async () => {
+          await openSaved(r);
           if (A.opened?.id === r.id) void send();
         }, { ghost: true, cls: 'btn-icon', title: `Send “${r.name}” now` }),
         button('✎', () => editDetails(r), { ghost: true, cls: 'btn-icon', title: 'Rename or move' }),
@@ -1285,11 +1307,14 @@ function bodyEditor(): HTMLElement {
     ? button('Generate example', () => {
         const ex = content.example !== undefined ? content.example : exampleFromSchema(content.schema, found.spec.schemas, { for: 'request' });
         const text = JSON.stringify(ex ?? {}, null, 2);
-        if (A.draft.body.trim() && A.draft.body !== text && !confirm('Replace the body with an example from the spec?')) return;
-        A.draft.body = text;
-        if (!A.draft.contentType) A.draft.contentType = content.type;
-        renderTab();
-        refresh();
+        const replace = () => {
+          A.draft.body = text;
+          if (!A.draft.contentType) A.draft.contentType = content.type;
+          renderTab();
+          refresh();
+        };
+        if (!A.draft.body.trim() || A.draft.body === text) return replace();
+        void confirmDialog({ title: 'Replace the body?', text: 'The body you have now is replaced with an example built from the spec.', ok: 'Replace body' }).then((go) => go && replace());
       }, { title: `An example ${content.type} body built from the spec’s schema` })
     : null;
   const fmt = button('Format', () => {

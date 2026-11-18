@@ -923,6 +923,38 @@ details.raw summary {
   background: var(--surface);
 }
 .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+
+/* Debug Hub's own confirm() (confirm.ts). */
+.dialog.confirm { width: min(440px, calc(100vw - 32px)); padding: 22px 22px 18px; }
+.dialog.confirm[open] { animation: confirm-in 0.14s ease-out; }
+@keyframes confirm-in { from { opacity: 0; transform: translateY(6px) scale(0.98); } }
+.confirm-form { display: grid; grid-template-columns: auto 1fr; column-gap: 14px; }
+.confirm-icon {
+  width: 38px;
+  height: 38px;
+  border-radius: 10px;
+  display: grid;
+  place-items: center;
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+.confirm-icon.danger { color: var(--error); background: var(--error-soft); }
+.confirm-main { min-width: 0; }
+.confirm-main h2 { margin: 2px 0 6px; font-size: 15px; }
+.confirm-text { margin: 0; color: var(--text-2); line-height: 1.5; }
+.confirm-subject {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--surface-2);
+  overflow: hidden;
+}
+.confirm-subject > * { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.confirm-note { margin: 10px 0 0; color: var(--muted); font-size: 12px; }
+.confirm-actions { grid-column: 1 / -1; margin-top: 20px; }
+.api-confirm-req .api-item-line { flex-direction: row; }
+.api-confirm-req .api-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .keys { display: grid; grid-template-columns: auto 1fr; gap: 9px 16px; margin: 0; align-items: center; }
 .keys dt { color: var(--text-2); white-space: nowrap; }
 .keys dd { margin: 0; }
@@ -2381,8 +2413,6 @@ body.metrics-open #main { display: none; }
 .hosted-card p { margin: 4px 0 0; color: var(--text-2); line-height: 1.5; }
 .hosted-card code { font: 12px var(--mono); padding: 0 4px; border-radius: 4px; background: var(--surface-2); border: 1px solid var(--border); overflow-wrap: anywhere; }
 .tm-tag.self { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); font-weight: 600; cursor: help; }
-.tm-stop-self { width: min(440px, 92vw); }
-.tm-stop-self p { margin: 0 0 8px; line-height: 1.5; }
 /* ── Package registries ──────────────────────────────── */
 /* The Packages card and its notices on the Tomcat page (src/ui/registry.ts), and Settings › Package
    registries (src/ui/registrysettings.ts). Everything for the feature is in this one block. */

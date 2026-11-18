@@ -1,5 +1,6 @@
 import type { TomcatState } from '../shared/tomcat';
 import { hostInfo, hostInfoNow } from './base';
+import { confirmDialog } from './confirm';
 import { h, type Child } from './dom';
 
 /**
@@ -106,38 +107,12 @@ export function hostedNote(s: TomcatState): HTMLElement | null {
 
 /** Asks before Stop Tomcat stops the hub itself. Resolves to whether to go ahead. */
 export function confirmStopOwnTomcat(): Promise<boolean> {
-  return new Promise((resolve) => {
-    const ok = h('button', { type: 'submit', class: 'btn btn-danger' }, 'Stop Tomcat');
-    const cancel = h('button', { type: 'button', class: 'btn' }, 'Cancel');
-    const form = h(
-      'form',
-      { method: 'dialog' },
-      h('h2', {}, 'Stop Tomcat, and Debug Hub with it?'),
-      h('p', {}, 'Debug Hub runs inside this Tomcat. When Tomcat stops, this page stops working, and it cannot start Tomcat again.'),
-      h('p', { class: 'muted' }, 'To get it back, start Tomcat yourself (bin/startup, your IDE or the service) and reload this page.'),
-      h('div', { class: 'dialog-actions' }, cancel, ok),
-    );
-    const dialog = h('dialog', { class: 'dialog tm-stop-self' }, form) as HTMLDialogElement;
-    let done = false;
-    // Answered by the buttons themselves, not by the dialog's close event, which a browser may
-    // deliver late to a page in the background.
-    const finish = (go: boolean) => {
-      if (done) return;
-      done = true;
-      if (dialog.open) dialog.close();
-      dialog.remove();
-      resolve(go);
-    };
-    document.body.append(dialog);
-    cancel.addEventListener('click', () => finish(false));
-    form.addEventListener('submit', (e) => {
-      e.preventDefault();
-      finish(true);
-    });
-    // Escape.
-    dialog.addEventListener('close', () => finish(false));
-    dialog.showModal();
-    cancel.focus();
+  return confirmDialog({
+    title: 'Stop Tomcat, and Debug Hub with it?',
+    text: 'Debug Hub runs inside this Tomcat. When Tomcat stops, this page stops working, and it cannot start Tomcat again.',
+    note: 'To get it back, start Tomcat yourself (bin/startup, your IDE or the service) and reload this page.',
+    ok: 'Stop Tomcat',
+    danger: true,
   });
 }
 
