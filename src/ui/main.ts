@@ -832,6 +832,54 @@ function bodySection(title: string, d: Record<string, any>, mime?: string | null
   return el;
 }
 
+/**
+ * Buttons under a request's title, above the find bar: its response body (and request body) in
+ * the JSON viewer, without scrolling down to the body first. A body that is not JSON gets a
+ * button that scrolls to it instead.
+ */
+function quickBodies(resJson: JsonSource | null, reqJson: JsonSource | null, resSec: HTMLElement | null, reqSec: HTMLElement | null): HTMLElement | null {
+  const buttons: HTMLElement[] = [];
+  const jsonButton = (label: string, src: JsonSource, primary: boolean) => {
+    const b = h('button', { type: 'button', class: `btn btn-sm${primary ? ' btn-primary' : ''}`, title: `Open the ${label.toLowerCase()} in the JSON viewer${primary ? ' (V)' : ''}` },
+      jsonIcon(), `${label} in JSON viewer`);
+    b.onclick = () => viewJson(src);
+    return b;
+  };
+  const jumpButton = (label: string, sec: HTMLElement) => {
+    const b = h('button', { type: 'button', class: 'btn btn-sm', title: `Scroll down to the ${label.toLowerCase()}` }, `${label} ↓`);
+    b.onclick = () => {
+      sec.scrollIntoView({ block: 'start', behavior: 'smooth' });
+      sec.classList.remove('flash');
+      void sec.offsetWidth;
+      sec.classList.add('flash');
+    };
+    return b;
+  };
+  if (resJson) buttons.push(jsonButton('Response body', resJson, true));
+  else if (resSec) buttons.push(jumpButton('Response body', resSec));
+  if (reqJson) buttons.push(jsonButton('Request body', reqJson, !resJson));
+  return buttons.length ? h('div', { class: 'd-quick' }, ...buttons) : null;
+}
+
+/** Curly braces, for the JSON viewer buttons. */
+function jsonIcon(): Node {
+  const ns = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(ns, 'svg');
+  svg.setAttribute('viewBox', '0 0 16 16');
+  svg.setAttribute('width', '13');
+  svg.setAttribute('height', '13');
+  svg.setAttribute('aria-hidden', 'true');
+  const p = document.createElementNS(ns, 'path');
+  p.setAttribute('d', 'M5.5 2.5C4 2.5 4 3.5 4 5s-.5 2.5-1.5 3c1 .5 1.5 1.5 1.5 3s0 2.5 1.5 2.5M10.5 2.5C12 2.5 12 3.5 12 5s.5 2.5 1.5 3c-1 .5-1.5 1.5-1.5 3s0 2.5-1.5 2.5');
+  p.setAttribute('fill', 'none');
+  p.setAttribute('stroke', 'currentColor');
+  p.setAttribute('stroke-width', '1.5');
+  p.setAttribute('stroke-linecap', 'round');
+  p.setAttribute('stroke-linejoin', 'round');
+  svg.append(p);
+  return svg;
+}
+
 function headersSection(title: string, headers: Record<string, string> | undefined): HTMLElement | null {
   const entries = Object.entries(headers ?? {});
   if (entries.length === 0) return null;
@@ -986,9 +1034,15 @@ function renderDetail(): void {
     add(section(isSender(row.ev.source) ? 'Server events' : 'Related events', relatedHost));
   }
 
+  let quick: HTMLElement | null = null;
   if (g === 'network' && isSender(row.ev.source)) {
-    add(bodySection('Response body', rd, rd.mimeType, bodySource(row, 'response')));
-    add(bodySection('Request body', row.ev.kind === 'request' ? d : {}, undefined, bodySource(row, 'request')));
+    const resJson = bodySource(row, 'response');
+    const reqJson = bodySource(row, 'request');
+    const resSec = bodySection('Response body', rd, rd.mimeType, resJson);
+    const reqSec = bodySection('Request body', row.ev.kind === 'request' ? d : {}, undefined, reqJson);
+    add(resSec);
+    add(reqSec);
+    quick = quickBodies(resJson, reqJson, resSec, reqSec);
     add(headersSection('Response headers', rd.headers));
     add(headersSection('Request headers', row.ev.kind === 'request' ? d.headers : undefined));
   } else if (g === 'console') {
@@ -1021,7 +1075,7 @@ function renderDetail(): void {
 
   // Everything but the find bar is replaced, so typing in it is not interrupted.
   for (const el of [...detail.children]) if (el !== finder.bar) el.remove();
-  detail.prepend(head, title);
+  detail.prepend(...[head, title, quick].filter((x): x is HTMLElement => !!x));
   // Re-inserting the bar, even in place, would take focus from it.
   if (finder.bar.parentElement !== detail) detail.append(finder.bar);
   detail.append(body);

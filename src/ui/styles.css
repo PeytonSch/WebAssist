@@ -675,6 +675,13 @@ main {
   border-top: 1px solid var(--border);
 }
 
+/* Quick buttons under a request's title: its bodies in the JSON viewer. */
+.d-quick { display: flex; flex-wrap: wrap; gap: 6px; margin: -6px 18px 12px; flex: none; }
+.d-quick .btn { display: inline-flex; align-items: center; gap: 6px; }
+.sec.flash { animation: sec-flash 1.2s ease-out; border-radius: 6px; }
+@keyframes sec-flash { from { box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 35%, transparent); } to { box-shadow: 0 0 0 4px transparent; } }
+@media (prefers-reduced-motion: reduce) { .sec.flash { animation: none; } }
+
 .sec { margin-top: 18px; }
 .sec-head {
   display: flex;
