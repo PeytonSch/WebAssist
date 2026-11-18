@@ -40,6 +40,9 @@ const strings = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is
  *   POST /api/tomcat/webapps/<name>/<action> start, stop, reload, disable, enable
  *   POST /api/tomcat/server/start            { only?: true } start commands, Tomcat, Chrome; only: just Tomcat
  *   POST /api/tomcat/server/stop             run the stop script, or Tomcat's bin/shutdown
+ *   POST /api/tomcat/server/restart          stop, wait until Tomcat is gone, start Tomcat alone
+ *   POST /api/tomcat/server/kill             end the foreground Tomcat process started from here
+ *   GET  /api/tomcat/console?id=&from=       output of a console source (start, stop, cmd:<run id>) since byte from
  *   POST /api/tomcat/commands/<i>/run        { command } run start command i on its own
  *   POST /api/tomcat/runs/<id>/stop          stop a start command's run and what it started
  *   POST /api/tomcat/deploy                  { file, name, disabledCopy: "remove" | "keep", keep?: [relative paths],
@@ -68,6 +71,11 @@ export async function tomcatRoute(
   try {
     if (path === '/api/tomcat' && req.method === 'GET') return json(res, 200, await tomcat.state()), true;
     if (path === '/api/tomcat/wars' && req.method === 'GET') return json(res, 200, await tomcat.wars()), true;
+    if (path === '/api/tomcat/console' && req.method === 'GET') {
+      const q = new URL(req.url ?? '', 'http://localhost').searchParams;
+      const from = Number(q.get('from') ?? '-1');
+      return json(res, 200, await tomcat.consoleOutput(q.get('id') ?? '', Number.isFinite(from) ? from : -1)), true;
+    }
     if (req.method === 'GET' && (path === '/api/tomcat/keep/compare' || path === '/api/tomcat/keep/file')) {
       const q = new URL(req.url ?? '', 'http://localhost').searchParams;
       const name = (q.get('name') ?? '').trim();
@@ -90,6 +98,8 @@ export async function tomcatRoute(
     }
     if (path === '/api/tomcat/server/start') return json(res, 200, { sequence: await tomcat.startTomcat((await body()).only === true) }), true;
     if (path === '/api/tomcat/server/stop') return json(res, 200, { run: await tomcat.runScript('stop') }), true;
+    if (path === '/api/tomcat/server/restart') return json(res, 200, { restart: await tomcat.restartTomcat() }), true;
+    if (path === '/api/tomcat/server/kill') return json(res, 200, { message: await tomcat.killTomcat() }), true;
     const cmd = /^\/api\/tomcat\/commands\/(\d+)\/run$/.exec(path);
     if (cmd) {
       const b = await body();

@@ -47,6 +47,8 @@ export interface ScriptRun {
   /** The end of what the script printed. */
   output: string;
   outputTruncated: boolean;
+  /** Tomcat itself, in the foreground (catalina run): it runs until Tomcat stops. */
+  foreground?: boolean;
 }
 
 export interface WarInfo {
@@ -66,8 +68,10 @@ export interface WarInfo {
 /** How Start Tomcat and Stop Tomcat run: the user's script, or Tomcat's own bin/startup and bin/shutdown. */
 export interface LaunchWay {
   how: 'script' | 'tomcat' | 'none';
-  /** The script or bin/startup file that runs. */
+  /** The script, or Tomcat's bin/catalina or bin/shutdown, that runs. */
   path: string | null;
+  /** Words after it: "run" for catalina, which keeps Tomcat in the foreground, its output in the console. */
+  args?: string[];
 }
 
 export interface TomcatLaunch {
@@ -146,6 +150,48 @@ export interface StartSequence {
   message: string | null;
 }
 
+/** A process whose output the Tomcat page's console shows: Tomcat, its shutdown, a start command. */
+export interface ConsoleSource {
+  /** "start", "stop" or "cmd:<run id>". */
+  id: string;
+  /** "Tomcat", "Shutdown", a script's or a start command's name. */
+  label: string;
+  /** Changes with each run, so the console starts afresh. */
+  runKey: string;
+  /** null: not known, for output from before Debug Hub restarted. */
+  running: boolean | null;
+  startedAt: string | null;
+  endedAt: string | null;
+  /** How it ended, e.g. "exit code 0", once it has. */
+  ended: string | null;
+  failed: boolean;
+  /** The command line, for the console's heading. */
+  command: string;
+  /** Tomcat itself in the foreground: Restart and End process apply to it. */
+  tomcat: boolean;
+}
+
+/** GET /api/tomcat/console: output of one console source written since a byte offset. */
+export interface ConsoleChunk {
+  id: string;
+  runKey: string;
+  text: string;
+  /** Byte offset of `text` in the output; above 0 on a first read means earlier output was left out. */
+  start: number;
+  /** The offset to ask from next time. */
+  next: number;
+  size: number;
+}
+
+/** Restart Tomcat: stop it, wait until it is gone, start it again. */
+export interface RestartState {
+  running: boolean;
+  phase: 'stopping' | 'waiting' | 'starting' | 'done' | 'failed';
+  startedAt: string;
+  endedAt: string | null;
+  message: string | null;
+}
+
 export interface TomcatState {
   settings: {
     webappsDir: string;
@@ -175,6 +221,10 @@ export interface TomcatState {
     origin: string | null;
   };
   scripts: { start: ScriptRun | null; stop: ScriptRun | null };
+  /** What the console can show, Tomcat first. */
+  consoles: ConsoleSource[];
+  /** The latest Restart Tomcat. */
+  restart: RestartState | null;
   wars: WarInfo[];
   /** Set when Debug Hub runs as a webapp inside the Tomcat this page manages. */
   hosted?: {

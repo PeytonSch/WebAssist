@@ -4,9 +4,9 @@ import type { LaunchWay, ScriptKind, TomcatLaunch } from '../../shared/tomcat';
 import type { Config } from '../config';
 
 /**
- * Starting Tomcat the traditional way, with its own bin/startup and bin/shutdown, when no start
- * or stop script is set. Works out CATALINA_HOME, CATALINA_BASE and JAVA_HOME from the settings
- * and says what is missing, because startup.bat on its own only fails with a terse message.
+ * Starting Tomcat with its own scripts (bin/catalina run, bin/shutdown) when no start or stop
+ * script is set. Works out CATALINA_HOME, CATALINA_BASE and JAVA_HOME from the settings and says
+ * what is missing, because catalina.bat on its own only fails with a terse message.
  */
 
 /** The parts of the machine this depends on, so tests can stand in for them. */
@@ -54,11 +54,18 @@ function samePath(a: string, b: string, platform: NodeJS.Platform): boolean {
   return platform === 'win32' ? norm(a).toLowerCase() === norm(b).toLowerCase() : norm(a) === norm(b);
 }
 
-/** bin/startup.bat or bin/shutdown.bat on Windows, .sh elsewhere. */
+/**
+ * What starts and stops Tomcat: bin/catalina.bat, run as "catalina run" so Tomcat stays in the
+ * foreground and its console output goes to the Tomcat page (startup.bat would open a window of
+ * its own for it), and bin/shutdown.bat. .sh elsewhere.
+ */
 export function catalinaScript(home: string, kind: ScriptKind, platform: NodeJS.Platform = process.platform): string {
   const ext = platform === 'win32' ? 'bat' : 'sh';
-  return pathFor(platform).join(home, 'bin', `${kind === 'start' ? 'startup' : 'shutdown'}.${ext}`);
+  return pathFor(platform).join(home, 'bin', `${kind === 'start' ? 'catalina' : 'shutdown'}.${ext}`);
 }
+
+/** The words after catalinaScript: "run" to start. */
+export const catalinaArgs = (kind: ScriptKind): string[] => (kind === 'start' ? ['run'] : []);
 
 export interface TomcatHome {
   home: string | null;
@@ -108,7 +115,7 @@ export function tomcatEnv(
     if (key) delete env[key];
     if (value) env[name] = value;
   };
-  // Windows reads backslashes; startup.bat builds paths like %CATALINA_HOME%\bin\catalina.bat.
+  // Windows reads backslashes; catalina.bat builds paths like %CATALINA_HOME%\bin\catalina.bat.
   const native = (p: string) => (platform === 'win32' ? p.replace(/\//g, '\\') : p);
   set('CATALINA_HOME', native(vars.home));
   if (vars.base) set('CATALINA_BASE', native(vars.base));
@@ -145,7 +152,9 @@ export function launchPlan(t: Config['tomcat'], m: LaunchMachine = thisLaunchMac
     const script = kind === 'start' ? t.startScript : t.stopScript;
     if (script) return { how: 'script', path: script };
     const file = own(kind);
-    return file ? { how: 'tomcat', path: file } : { how: 'none', path: null };
+    if (!file) return { how: 'none', path: null };
+    const args = catalinaArgs(kind);
+    return args.length ? { how: 'tomcat', path: file, args } : { how: 'tomcat', path: file };
   };
   const start = way('start');
   const stop = way('stop');
@@ -166,9 +175,9 @@ export function launchPlan(t: Config['tomcat'], m: LaunchMachine = thisLaunchMac
       if ([where.base, where.home].some((d) => d && m.isFile(p.join(d, 'bin', setenv)))) javaSource = 'setenv';
     }
     const used = start.how === 'tomcat' || stop.how === 'tomcat';
-    // startup.sh finds java on the PATH; startup.bat insists on JAVA_HOME or JRE_HOME.
+    // catalina.sh finds java on the PATH; catalina.bat insists on JAVA_HOME or JRE_HOME.
     if (used && !javaSource && m.platform === 'win32') {
-      warnings.push('Neither JAVA_HOME nor JRE_HOME is set for Debug Hub, so startup.bat would stop with “Neither the JAVA_HOME nor the JRE_HOME environment variable is defined”. Set the Java folder in Settings.');
+      warnings.push('Neither JAVA_HOME nor JRE_HOME is set for Debug Hub, so catalina.bat would stop with “Neither the JAVA_HOME nor the JRE_HOME environment variable is defined”. Set the Java folder in Settings.');
     }
   }
 

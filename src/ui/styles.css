@@ -1413,20 +1413,120 @@ body.tomcat-open #main { display: none; }
 .card-body > .tm-script:first-child { border-top: 0; }
 .tm-script-label { font-weight: 550; }
 .tm-script .btn { justify-content: center; }
-.tm-script-run { margin: 6px 0 14px; display: flex; flex-direction: column; gap: 6px; }
 .tm-run-head { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
 .tm-run { font-weight: 550; }
 .tm-run.ok { color: var(--ok); }
 .tm-run.error { color: var(--error); }
 .tm-run.running { color: var(--accent); }
 .tm-cmd { font: 11.5px var(--mono); color: var(--muted); overflow-wrap: anywhere; }
-pre.code.tm-output { max-height: 280px; white-space: pre-wrap; }
 
 /* How Start and Stop run, and the start commands that come with Start. */
 .tm-how { min-width: 0; overflow-wrap: anywhere; }
 .tm-how code { font: 12px var(--mono); }
 .tm-launch { display: flex; flex-wrap: wrap; gap: 4px 16px; padding: 0 0 10px 112px; font-size: 12px; }
 .tm-launch code { font: 11.5px var(--mono); overflow-wrap: anywhere; }
+.tm-restart { display: flex; align-items: center; gap: 10px; margin: 6px 0 12px; padding: 9px 12px; border-radius: 9px; background: var(--accent-soft); color: var(--accent); }
+.tm-restart b { font-weight: 600; }
+.tm-restart .muted { color: var(--text-2); }
+.tm-restart.done { background: var(--ok-soft); color: var(--ok); }
+.tm-restart.failed { background: var(--error-soft); color: var(--error); }
+
+/* ── Console (tomcatconsole.ts): a terminal, dark in both themes ── */
+.tc {
+  --tc-bg: #0d1117;
+  --tc-bar: #151b24;
+  --tc-line: #222a36;
+  --tc-text: #d5dbe5;
+  --tc-dim: #7d8799;
+  --tc-err: #ff7b72;
+  --tc-warn: #e3b341;
+  --tc-ok: #56d364;
+  --tc-info: #79c0ff;
+  --tc-logger: #d2a8ff;
+  padding: 12px 0 14px;
+}
+.tc-top { display: flex; align-items: flex-end; gap: 12px; flex-wrap: wrap; margin-bottom: 8px; }
+.tc-tabs { display: flex; flex-wrap: wrap; gap: 4px; flex: 1; min-width: 0; }
+.tc-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 28px;
+  padding: 0 11px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--surface);
+  color: var(--text-2);
+  font: 550 12.5px var(--sans);
+  cursor: pointer;
+}
+.tc-tab:hover { background: var(--hover); color: var(--text); }
+.tc-tab[aria-selected="true"] { background: var(--tc-bg); border-color: var(--tc-bg); color: #fff; }
+.tc-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); flex: none; }
+.tc-tab.running .tc-dot { background: #3fb950; box-shadow: 0 0 0 3px color-mix(in srgb, #3fb950 25%, transparent); animation: tc-pulse 1.6s ease-in-out infinite alternate; }
+.tc-tab.failed .tc-dot { background: var(--error); }
+.tc-tab.earlier .tc-dot { background: var(--warn); }
+@keyframes tc-pulse { to { box-shadow: 0 0 0 1px color-mix(in srgb, #3fb950 10%, transparent); } }
+.tc-tools { display: flex; gap: 4px; flex: none; }
+.tc-toggle.on { color: var(--accent); background: var(--accent-soft); }
+.tc-term { position: relative; border-radius: 10px; overflow: hidden; background: var(--tc-bg); border: 1px solid var(--tc-line); box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03); }
+.tc-bar { display: flex; align-items: center; gap: 8px; height: 30px; padding: 0 12px; background: var(--tc-bar); border-bottom: 1px solid var(--tc-line); }
+.tc-bar::before { content: "$"; color: var(--tc-ok); font: 600 12px var(--mono); }
+.tc-cmd { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--tc-dim); font: 11.5px var(--mono); background: none; padding: 0; }
+.tc-screen {
+  height: 360px;
+  min-height: 160px;
+  max-height: 80vh;
+  overflow: auto;
+  resize: vertical;
+  padding: 8px 0 10px;
+  color: var(--tc-text);
+  font: 12px/1.55 var(--mono);
+  outline: none;
+  scrollbar-color: #3a4352 transparent;
+}
+.tc-screen:focus-visible { box-shadow: inset 0 0 0 2px var(--accent); }
+.tc-line { padding: 0 14px; white-space: pre; min-height: 1.55em; }
+.tc-screen.wrap .tc-line { white-space: pre-wrap; overflow-wrap: anywhere; }
+.tc-line:hover { background: rgba(255, 255, 255, 0.035); }
+.tc-line.err { color: var(--tc-err); background: rgba(255, 123, 114, 0.07); }
+.tc-line.warn { color: var(--tc-warn); }
+.tc-line.ok { color: var(--tc-ok); }
+.tc-line.trace { color: color-mix(in srgb, var(--tc-err) 60%, var(--tc-dim)); }
+.tc-line.tc-note { color: var(--tc-dim); font-style: italic; }
+.tc-live:empty { display: none; }
+.tc-ts, .tc-thread { color: var(--tc-dim); }
+.tc-logger { color: var(--tc-logger); }
+.tc-lvl { font-weight: 600; }
+.tc-lvl.info { color: var(--tc-info); }
+.tc-lvl.warn { color: var(--tc-warn); }
+.tc-lvl.err { color: var(--tc-err); }
+.tc-lvl.dim { color: var(--tc-dim); }
+.tc-line.err .tc-ts, .tc-line.warn .tc-ts { color: inherit; opacity: 0.75; }
+.a-b { font-weight: 700; }
+.a-30, .a-90 { color: #8b949e; } .a-31, .a-91 { color: #ff7b72; } .a-32, .a-92 { color: #56d364; } .a-33, .a-93 { color: #e3b341; }
+.a-34, .a-94 { color: #79c0ff; } .a-35, .a-95 { color: #d2a8ff; } .a-36, .a-96 { color: #56d4dd; } .a-37, .a-97 { color: #f0f6fc; }
+.tc-jump {
+  position: absolute;
+  right: 18px;
+  bottom: 14px;
+  padding: 5px 12px;
+  border: 1px solid #3a4352;
+  border-radius: 999px;
+  background: #1f2632;
+  color: #e6edf3;
+  font: 600 12px var(--sans);
+  cursor: pointer;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+}
+.tc-jump:hover { background: #283141; }
+.tc-foot { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; margin-top: 8px; color: var(--text-2); font-size: 12px; }
+.tc-state { font-weight: 600; }
+.tc-state.running { color: var(--ok); }
+.tc-state.failed { color: var(--error); }
+.tc-state.earlier { color: var(--warn); }
+@media (prefers-reduced-motion: reduce) { .tc-tab.running .tc-dot { animation: none; } }
+
 .tm-seq, .tm-cmds { margin: 6px 0 14px; padding-top: 12px; border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 6px; }
 .tm-steps { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 4px; }
 .tm-step { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; font-size: 12.5px; }
@@ -1460,7 +1560,8 @@ pre.code.tm-output { max-height: 280px; white-space: pre-wrap; }
 .card-body > .tm-row:first-child, .tm-note + .tm-row { border-top: 0; }
 .tm-row > * { min-width: 0; overflow-wrap: anywhere; }
 /* Busy: the row fades, but not the spinner saying what is happening. */
-.tm-row.busy > :not(.tm-actions) { opacity: 0.55; }
+.tm-row.busy > :not(.tm-actions):not(.tm-busy) { opacity: 0.55; }
+.tm-row > .tm-busy { justify-self: end; }
 .tm-row.busy .tm-actions .btn { opacity: 0.6; }
 .tm-busy { display: inline-flex; align-items: center; gap: 7px; margin-right: 4px; color: var(--accent); font-size: 12px; font-weight: 550; white-space: nowrap; }
 .tm-busy .spinner { flex: none; }

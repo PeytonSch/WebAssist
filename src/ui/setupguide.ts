@@ -525,7 +525,7 @@ function tomcatServerStep(): Step {
             label: 'Start script',
             need: 'optional',
             path: 'tomcat.startScript',
-            help: ['Normally Start Tomcat runs Tomcat’s own ', code(ex('bin/startup.bat', 'bin/startup.sh')), '. If your team starts it with a script of its own, choose that script here.'],
+            help: ['Normally Start Tomcat runs Tomcat’s own ', code(ex('bin\\catalina.bat run', 'bin/catalina.sh run')), ', with its output in the console on the Tomcat page. If your team starts it with a script of its own, choose that script here.'],
             control: k.fileInput('tomcat.startScript', 'Choose the script that starts Tomcat', 'Tomcat’s own startup'),
           }),
           q({

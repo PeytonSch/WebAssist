@@ -1,7 +1,9 @@
-import { access, stat } from 'node:fs/promises';
-import { basename, isAbsolute, relative } from 'node:path';
+import { access, readdir, stat } from 'node:fs/promises';
+import { basename, isAbsolute, join, relative } from 'node:path';
 import type { HubEvent, Level } from '../../shared/types';
-import type { AppFolder, CommandRun, KeepPreview, ScriptKind, ScriptRun, StartSequence, TomcatState, WarInfo, WebappAction, WebappInfo } from '../../shared/tomcat';
+import type {
+  AppFolder, CommandRun, ConsoleChunk, ConsoleSource, KeepPreview, RestartState, ScriptKind, ScriptRun, StartSequence, TomcatState, WarInfo, WebappAction, WebappInfo,
+} from '../../shared/tomcat';
 import { EntryGrouper } from '../collectors/logfile';
 import type { Config } from '../config';
 import { makeEvent } from '../normalize';
@@ -13,10 +15,10 @@ import { compareKept, mergedFiles, readMergeFile } from './merge';
 import { appParams, managerCommand, managerList, managerOrigin, type Fetch, type ManagerApp } from './manager';
 import { hosted } from '../hosted/info';
 import { isSelfWebapp, ownTomcat, SELF_REFUSED, selfPath } from '../hosted/self';
-import { CommandRunner } from './commands';
+import { CommandRunner, killTree } from './commands';
 import { launchPlan, thisLaunchMachine, type LaunchMachine } from './launch';
 import { reveal } from './reveal';
-import { OutputFollower, ScriptRunner } from './scripts';
+import { OutputFollower, readChunk, ScriptRunner } from './scripts';
 import { Sequence } from './sequence';
 import { checkName, contextPath, deployWar, guessTarget, listApps, moveApp, removeApp, TomcatError, type DiskApp } from './webapps';
 import { WarWatcher, type WatchedWar } from './warwatch';
@@ -38,6 +40,8 @@ export interface TomcatServiceOptions {
   commandLogDir?: string;
   /** How long Start Tomcat waits for a start command marked "wait". Default 5 minutes. */
   commandWaitMs?: number;
+  /** How long Restart waits for Tomcat to stop before ending it. Default 60 seconds. */
+  restartWaitMs?: number;
   /** Stands in for this machine when working out how Tomcat starts. */
   machine?: LaunchMachine;
   warPollMs?: number;
@@ -50,6 +54,11 @@ export interface TomcatServiceOptions {
 export type ChromeStarter = () => Promise<{ ok: boolean; message: string; hint?: string }>;
 
 const COMMAND_WAIT_MS = 5 * 60_000;
+const RESTART_WAIT_MS = 60_000;
+/** Output from before Debug Hub restarted is offered this long after it was last written. */
+const EARLIER_OUTPUT_MS = 24 * 3600_000;
+
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 /** A line of command output that reads like a problem, for the timeline's level colours. */
 function lineLevel(line: string): Level {
@@ -83,6 +92,7 @@ export class TomcatService {
   private commands: CommandRunner;
   private commandOutputs = new Map<number, { follower: OutputFollower; grouper: EntryGrouper }>();
   private sequence: Sequence | null = null;
+  private restartState: RestartState | null = null;
   private started = false;
   /** Starts Chrome for "Also start Chrome"; without it that step reports it is not available. */
   chromeStarter: ChromeStarter | null = null;
@@ -166,7 +176,8 @@ export class TomcatService {
     const follower = new OutputFollower(logFile, this.cfg.tail.pollMs, (line) => grouper.push(logFile, line));
     this.outputs.set(run.kind, { follower, grouper });
     follower.start();
-    this.note('info', `Ran Tomcat ${run.kind} script ${name}`, { script: run.script, command: run.command });
+    if (run.foreground) this.note('info', `Started Tomcat: ${name} run${run.pid ? ` (process ${run.pid})` : ''}. Its output is in the console on the Tomcat page.`, { script: run.script, command: run.command });
+    else this.note('info', `Ran Tomcat ${run.kind} script ${name}`, { script: run.script, command: run.command });
   }
 
   private async scriptExited(run: ScriptRun): Promise<void> {
@@ -179,7 +190,10 @@ export class TomcatService {
     }
     const name = basename(run.script);
     if (run.error) this.note('error', `Tomcat ${run.kind} script ${name} could not run: ${run.error}`, { script: run.script });
-    else {
+    else if (run.foreground) {
+      const how = run.exitCode != null ? `exit code ${run.exitCode}` : `signal ${run.signal}`;
+      this.note(run.exitCode === 0 || run.signal === 'SIGTERM' ? 'info' : 'warn', `Tomcat stopped (${name} run ended with ${how})`, { script: run.script });
+    } else {
       const how = run.exitCode != null ? `exit code ${run.exitCode}` : `signal ${run.signal}`;
       this.note(run.exitCode === 0 ? 'info' : 'warn', `Tomcat ${run.kind} script ${name} finished with ${how}`, { script: run.script });
     }
@@ -352,6 +366,8 @@ export class TomcatService {
       disabled: disabled.map((a) => ({ ...a, path: contextPath(a.name), state: 'disabled', sessions: null, external: false })),
       manager,
       scripts: { start: await this.scripts.snapshot('start'), stop: await this.scripts.snapshot('stop') },
+      consoles: await this.consoleSources(),
+      restart: this.restartState ? structuredClone(this.restartState) : null,
       wars: this.watcher.list().map((w) => this.warInfo(w, names)),
     };
   }
@@ -604,12 +620,12 @@ export class TomcatService {
     return launchPlan(this.cfg.tomcat, this.opts.machine ?? thisLaunchMachine());
   }
 
-  /** Runs the start or stop script, or else Tomcat's own bin/startup or bin/shutdown. */
+  /** Runs the start or stop script, or else Tomcat's own bin/catalina run or bin/shutdown. */
   async runScript(kind: ScriptKind): Promise<ScriptRun> {
     const { info, env } = this.plan();
     const way = info[kind];
     if (way.how === 'script') return this.scripts.run(kind, way.path!);
-    if (way.how === 'tomcat') return this.scripts.run(kind, way.path!, { env: env!, windowsHide: false });
+    if (way.how === 'tomcat') return this.scripts.run(kind, way.path!, { env: env!, args: way.args, foreground: !!way.args?.includes('run') });
     const verb = kind === 'start' ? 'start' : 'stop';
     throw new TomcatError(`No way to ${verb} Tomcat yet: set the Tomcat folder or a ${verb} script in Settings › Tomcat server. ${info.problems[0] ?? ''}`.trim());
   }
@@ -631,6 +647,7 @@ export class TomcatService {
     const way = this.plan().info.start;
     if (way.how === 'none') await this.runScript('start'); // throws, saying what is missing
     const prev = this.scripts.isRunning('start');
+    if (prev?.foreground) throw new TomcatError(`Tomcat is already running (process ${prev.pid}, started ${new Date(prev.startedAt).toLocaleTimeString()}). Use Restart to start it afresh.`, 409);
     if (prev) {
       throw new TomcatError(
         `The start script from ${new Date(prev.startedAt).toLocaleTimeString()} is still running (process ${prev.pid}). If it keeps Tomcat in the foreground, Tomcat is already running.`,
@@ -638,7 +655,7 @@ export class TomcatService {
       );
     }
     if (!(await access(way.path!).then(() => true, () => false))) {
-      throw new TomcatError(`${way.how === 'script' ? 'The start script' : 'Tomcat’s startup script'} was not found: ${way.path}`, 404);
+      throw new TomcatError(`${way.how === 'script' ? 'The start script' : 'Tomcat’s catalina script'} was not found: ${way.path}`, 404);
     }
 
     const t = this.cfg.tomcat;
@@ -654,7 +671,7 @@ export class TomcatService {
         startTomcat: async () => {
           const run = await this.runScript('start');
           if (run.error) throw new TomcatError(run.error);
-          return way.how === 'script' ? `Ran ${basename(run.script)}.` : `Ran Tomcat’s ${basename(run.script)}.`;
+          return way.how === 'script' ? `Ran ${basename(run.script)}.` : `Started Tomcat (${basename(run.script)} run); its output is in the console.`;
         },
         startChrome: t.startChrome
           ? async () => (this.chromeStarter ? this.chromeStarter() : { ok: false, message: 'Starting Chrome is not available here.' })
@@ -668,6 +685,186 @@ export class TomcatService {
     if (seq.state.steps.length > 1) this.note('info', `Starting Tomcat: ${seq.state.steps.map((s) => s.label).join(' → ')}`);
     void seq.start();
     return structuredClone(seq.state);
+  }
+
+  // ── Console ───────────────────────────────────────────
+
+  /**
+   * Tomcat's output file from before Debug Hub restarted (an update), when no Tomcat was started
+   * since: a foreground Tomcat outlives Debug Hub and goes on writing to it.
+   */
+  private async earlierTomcatOutput(): Promise<{ file: string; startedAt: string; modified: number } | null> {
+    if (this.scripts.latest('start')) return null;
+    const dir = this.scripts.folder;
+    const names = (await readdir(dir).catch(() => [] as string[])).filter((n) => /^tomcat-start-\d+\.log$/.test(n)).sort();
+    const name = names[names.length - 1];
+    if (!name) return null;
+    const file = join(dir, name);
+    const st = await stat(file).catch(() => null);
+    if (!st || Date.now() - st.mtimeMs > EARLIER_OUTPUT_MS || st.size === 0) return null;
+    return { file, startedAt: new Date(Number(/\d+/.exec(name)![0])).toISOString(), modified: st.mtimeMs };
+  }
+
+  private scriptSource(kind: ScriptKind): ConsoleSource | null {
+    const r = this.scripts.latest(kind);
+    if (!r) return null;
+    const { run } = r;
+    const label = run.foreground ? 'Tomcat' : kind === 'stop' && this.plan().info.stop.how === 'tomcat' ? 'Shutdown' : basename(run.script);
+    return {
+      id: kind,
+      label,
+      runKey: `${kind}-${run.startedAt}`,
+      running: run.running,
+      startedAt: run.startedAt,
+      endedAt: run.endedAt,
+      ended: run.running ? null : run.error ? `could not run: ${run.error}` : run.exitCode != null ? `exit code ${run.exitCode}` : `signal ${run.signal}`,
+      failed: !!run.error || (!run.running && run.exitCode !== 0 && run.signal !== 'SIGTERM'),
+      command: run.command,
+      tomcat: !!run.foreground,
+    };
+  }
+
+  /** What the console can show: Tomcat (or the start script), the start commands, the shutdown. */
+  async consoleSources(): Promise<ConsoleSource[]> {
+    const out: ConsoleSource[] = [];
+    const start = this.scriptSource('start');
+    if (start) out.push(start);
+    else {
+      const earlier = await this.earlierTomcatOutput();
+      if (earlier) {
+        out.push({
+          id: 'start', label: 'Tomcat (earlier)', runKey: `earlier-${earlier.startedAt}`, running: null, startedAt: earlier.startedAt, endedAt: null,
+          ended: null, failed: false, command: 'Started before Debug Hub restarted', tomcat: false,
+        });
+      }
+    }
+    const runs = [
+      ...this.cfg.tomcat.startCommands.map((c) => this.commands.latestFor(c)).filter((r): r is CommandRun => !!r),
+      ...this.commands.others(this.cfg.tomcat.startCommands),
+    ];
+    for (const run of runs) {
+      out.push({
+        id: `cmd:${run.id}`,
+        label: run.name,
+        runKey: `cmd-${run.id}`,
+        running: run.running,
+        startedAt: run.startedAt,
+        endedAt: run.endedAt,
+        ended: run.running ? null : run.error ? `could not run: ${run.error}` : run.stopped ? 'stopped' : run.exitCode != null ? `exit code ${run.exitCode}` : `signal ${run.signal}`,
+        failed: !!run.error || (!run.running && !run.stopped && run.exitCode !== 0),
+        command: run.command,
+        tomcat: false,
+      });
+    }
+    const stop = this.scriptSource('stop');
+    if (stop) out.push(stop);
+    return out;
+  }
+
+  /** Output of a console source since byte `from` (-1: the last part of it). */
+  async consoleOutput(id: string, from: number): Promise<ConsoleChunk> {
+    let file: string | null = null;
+    let runKey = '';
+    if (id === 'start' || id === 'stop') {
+      const src = this.scriptSource(id);
+      if (src) {
+        file = this.scripts.latest(id)!.logFile;
+        runKey = src.runKey;
+      } else if (id === 'start') {
+        const earlier = await this.earlierTomcatOutput();
+        if (earlier) {
+          file = earlier.file;
+          runKey = `earlier-${earlier.startedAt}`;
+        }
+      }
+    } else {
+      const m = /^cmd:(\d+)$/.exec(id);
+      const r = m ? this.commands.get(Number(m[1])) : null;
+      if (r) {
+        file = r.logFile;
+        runKey = `cmd-${r.run.id}`;
+      }
+    }
+    if (!file) throw new TomcatError('There is no such output (any more). Refresh the page.', 404);
+    const chunk = await readChunk(file, Number.isFinite(from) ? Math.floor(from) : -1);
+    return { id, runKey, ...chunk };
+  }
+
+  /** Ends a foreground Tomcat (catalina run) at once, for when Stop does not get it to stop. */
+  async killTomcat(): Promise<string> {
+    const run = this.scripts.isRunning('start');
+    if (!run?.foreground || !run.pid) throw new TomcatError('There is no Tomcat process started from here to end.', 409);
+    await killTree(run.pid);
+    this.note('warn', `Ended the Tomcat process ${run.pid}`, { script: run.script });
+    return `Ended Tomcat (process ${run.pid}).`;
+  }
+
+  // ── Restart ───────────────────────────────────────────
+
+  /**
+   * Restart Tomcat: runs Stop, waits until Tomcat is gone, then starts Tomcat alone (no start
+   * commands, no Chrome: those are still running). Returns once under way; the page follows.
+   */
+  async restartTomcat(): Promise<RestartState> {
+    if (ownTomcat(this.cfg)) throw new TomcatError('Debug Hub runs inside this Tomcat, so it cannot restart it: it would stop with it.', 409);
+    if (this.restartState?.running) throw new TomcatError('Tomcat is already being restarted.', 409);
+    if (this.sequence?.state.running) throw new TomcatError('Tomcat is being started. Wait for that to finish first.', 409);
+    const { info } = this.plan();
+    if (info.stop.how === 'none' || info.start.how === 'none') {
+      throw new TomcatError(`Restart needs a way to both stop and start Tomcat: set the Tomcat folder, or start and stop scripts, in Settings › Tomcat server. ${info.problems[0] ?? ''}`.trim());
+    }
+    const st: RestartState = { running: true, phase: 'stopping', startedAt: new Date().toISOString(), endedAt: null, message: null };
+    this.restartState = st;
+    this.note('info', 'Restarting Tomcat');
+    void this.restartSteps(st);
+    return structuredClone(st);
+  }
+
+  private async restartSteps(st: RestartState): Promise<void> {
+    const wait = this.opts.restartWaitMs ?? RESTART_WAIT_MS;
+    const finish = (phase: 'done' | 'failed', message: string) => {
+      Object.assign(st, { running: false, phase, message, endedAt: new Date().toISOString() });
+      this.note(phase === 'done' ? 'info' : 'error', message);
+    };
+    try {
+      // Tomcat in the foreground, started from here: its end is the sign it has stopped.
+      const tomcat = this.scripts.isRunning('start');
+      if (!this.scripts.isRunning('stop')) {
+        const run = await this.runScript('stop');
+        if (run.error) throw new TomcatError(`the stop script could not run: ${run.error}`);
+      }
+      await this.scripts.ended('stop');
+      st.phase = 'waiting';
+      if (tomcat) {
+        const gone = await Promise.race([this.scripts.ended('start').then(() => true), sleep(wait).then(() => false)]);
+        if (!gone && this.scripts.isRunning('start') === tomcat && tomcat.pid) {
+          this.note('warn', `Tomcat had not stopped after ${Math.round(wait / 1000)} s, so its process ${tomcat.pid} was ended.`);
+          await killTree(tomcat.pid).catch(() => undefined);
+          await Promise.race([this.scripts.ended('start'), sleep(10_000)]);
+        }
+      } else if (this.cfg.tomcat.manager.url) {
+        // Started some other way: stopped once the Manager no longer answers.
+        const until = Date.now() + wait;
+        while (Date.now() < until) {
+          try {
+            await managerList(this.cfg.tomcat.manager, this.opts.fetch);
+          } catch {
+            break;
+          }
+          await sleep(1000);
+        }
+      } else {
+        // Nothing to watch: give it a moment to let go of its port.
+        await sleep(Math.min(3000, wait));
+      }
+      st.phase = 'starting';
+      await this.startTomcat(true);
+      const ended = await this.sequence?.done;
+      if (ended && ended.outcome === 'failed') throw new TomcatError(ended.message ?? 'Tomcat did not start.');
+      finish('done', 'Restarted Tomcat.');
+    } catch (err) {
+      finish('failed', `Could not restart Tomcat: ${(err as Error).message}`);
+    }
   }
 
   /** The latest start sequence, for tests. */

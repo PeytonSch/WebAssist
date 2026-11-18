@@ -7,13 +7,33 @@ import type { ScriptKind, ScriptRun } from '../../shared/tomcat';
 import { TomcatError } from './webapps';
 
 /**
- * Runs the user's own Tomcat start and stop scripts.
+ * Runs the Tomcat start and stop scripts: the user's own, or Tomcat's (catalina run, which keeps
+ * Tomcat in the foreground so its console shows on the Tomcat page).
  *
- * The usual startup script launches Tomcat and exits at once, but a custom one may keep Tomcat in
- * the foreground ("catalina run"). So the hub never waits for the script, and starts it detached
- * with its output going to a file rather than a pipe: closing Debug Hub must not take a
- * foreground Tomcat down with it, which a broken pipe or a shared process group would.
+ * The hub never waits for a script, and starts it in the background with its output going to a
+ * file rather than a pipe: closing Debug Hub must not take a foreground Tomcat down with it, which
+ * a broken pipe or a shared process group would. See backgroundSpawn for how.
  */
+
+/**
+ * How a script, Tomcat or a start command is started: in the background, without a window of
+ * its own, outliving Debug Hub.
+ *
+ * Elsewhere than Windows: detached, so it leads its own process group (a signal to Debug Hub's
+ * group does not reach it, and Stop can signal all of it).
+ *
+ * Windows: not detached. Node's detached there means DETACHED_PROCESS, a process without any
+ * console, and then every console program it starts (java.exe for Tomcat, node.exe for a dev
+ * server) gets a new, visible console window: the extra terminal windows. Started attached and
+ * with windowsHide, the shell gets a hidden console of its own (or shares Debug Hub's, when that
+ * was started from a terminal), and what it runs inherits it, so nothing shows. It still outlives
+ * Debug Hub: Node puts the shell in a job that ends it when Debug Hub exits, but that job lets
+ * the shell's children break away (JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK), so Tomcat itself keeps
+ * running and writing to its output file.
+ */
+export function backgroundSpawn(platform: NodeJS.Platform = process.platform): { detached: boolean; windowsHide: boolean } {
+  return { detached: platform !== 'win32', windowsHide: true };
+}
 
 export interface ScriptCommand {
   file: string;
@@ -31,28 +51,32 @@ export interface ScriptCommand {
  */
 export function scriptCommand(
   script: string,
-  opts: { platform?: NodeJS.Platform; executable?: boolean; comspec?: string } = {},
+  opts: { platform?: NodeJS.Platform; executable?: boolean; comspec?: string; args?: string[] } = {},
 ): ScriptCommand {
   const platform = opts.platform ?? process.platform;
   const ext = extname(script).toLowerCase();
+  // Only fixed words from the hub ("run"), never text from a request or the settings.
+  const extra = opts.args ?? [];
+  if (extra.some((a) => !/^[\w.-]+$/.test(a))) throw new TomcatError(`Not a script argument: ${extra.join(' ')}`);
+  const tail = extra.length ? ` ${extra.join(' ')}` : '';
   if (platform === 'win32') {
     // Settings may hold forward slashes; cmd.exe reads "C:/x/startup.bat" as a switch in places.
     const path = script.replace(/\//g, '\\');
     if (/["%\r\n]/.test(path)) throw new TomcatError(`The script path cannot contain " or %: ${script}`);
     if (ext === '.bat' || ext === '.cmd') {
       const file = opts.comspec || 'cmd.exe';
-      const args = ['/d', '/s', '/c', `""${path}""`];
+      const args = ['/d', '/s', '/c', `""${path}"${tail}"`];
       return { file, args, verbatim: true, display: `${file} ${args.join(' ')}` };
     }
     if (ext === '.ps1') {
-      const args = ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', path];
-      return { file: 'powershell.exe', args, verbatim: false, display: `powershell.exe ${args.slice(0, -1).join(' ')} "${path}"` };
+      const args = ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', path, ...extra];
+      return { file: 'powershell.exe', args, verbatim: false, display: `powershell.exe ${args.slice(0, -1 - extra.length).join(' ')} "${path}"${tail}` };
     }
-    return { file: path, args: [], verbatim: false, display: `"${path}"` };
+    return { file: path, args: extra, verbatim: false, display: `"${path}"${tail}` };
   }
   // A shell script without the executable bit still runs through sh; one with it uses its own #! line.
-  if (ext === '.sh' && opts.executable === false) return { file: '/bin/sh', args: [script], verbatim: false, display: `/bin/sh '${script}'` };
-  return { file: script, args: [], verbatim: false, display: `'${script}'` };
+  if (ext === '.sh' && opts.executable === false) return { file: '/bin/sh', args: [script, ...extra], verbatim: false, display: `/bin/sh '${script}'${tail}` };
+  return { file: script, args: extra, verbatim: false, display: `'${script}'${tail}` };
 }
 
 const MAX_OUTPUT = 32 * 1024;
@@ -60,6 +84,7 @@ const MAX_OUTPUT = 32 * 1024;
 interface Running {
   run: ScriptRun;
   logFile: string;
+  ended: Promise<ScriptRun>;
 }
 
 export interface ScriptHooks {
@@ -71,12 +96,10 @@ export interface ScriptHooks {
 export interface RunOptions {
   /** The environment to run it with. Default: Debug Hub's own. */
   env?: Record<string, string>;
-  /**
-   * Ask Windows to start its windows hidden. On for the user's scripts, so a helper script does
-   * not flash a console. Off for Tomcat's own startup.bat, which opens Tomcat in a console window
-   * of its own ("start Tomcat ..."), the traditional way, and that window must stay visible.
-   */
-  windowsHide?: boolean;
+  /** Words after the script, e.g. "run" for catalina. */
+  args?: string[];
+  /** It is Tomcat itself, in the foreground (catalina run). */
+  foreground?: boolean;
 }
 
 export class ScriptRunner {
@@ -88,6 +111,22 @@ export class ScriptRunner {
   isRunning(kind: ScriptKind): ScriptRun | null {
     const r = this.runs.get(kind);
     return r?.run.running ? r.run : null;
+  }
+
+  /** The latest run of a kind and the file its output goes to. */
+  latest(kind: ScriptKind): { run: ScriptRun; logFile: string } | null {
+    const r = this.runs.get(kind);
+    return r ? { run: r.run, logFile: r.logFile } : null;
+  }
+
+  /** Resolves when the latest run of a kind has ended (at once if it has, or there is none). */
+  ended(kind: ScriptKind): Promise<ScriptRun | null> {
+    return this.runs.get(kind)?.ended ?? Promise.resolve(null);
+  }
+
+  /** Where output files go, for the console to find one from before Debug Hub restarted. */
+  get folder(): string {
+    return this.logDir;
   }
 
   async run(kind: ScriptKind, script: string, opts: RunOptions = {}): Promise<ScriptRun> {
@@ -109,7 +148,7 @@ export class ScriptRunner {
     if (!st.isFile()) throw new TomcatError(`The ${label} is not a file: ${script}`);
     let executable = true;
     if (process.platform !== 'win32') executable = await fs.access(script, constants.X_OK).then(() => true, () => false);
-    const cmd = scriptCommand(script, { executable, comspec: process.env.ComSpec });
+    const cmd = scriptCommand(script, { executable, comspec: process.env.ComSpec, args: opts.args });
 
     await fs.mkdir(this.logDir, { recursive: true });
     await this.cleanOldLogs(kind);
@@ -128,12 +167,16 @@ export class ScriptRunner {
       error: null,
       output: '',
       outputTruncated: false,
+      ...(opts.foreground ? { foreground: true } : {}),
     };
-    this.runs.set(kind, { run, logFile });
+    let settle!: (r: ScriptRun) => void;
+    const ended = new Promise<ScriptRun>((resolve) => (settle = resolve));
+    this.runs.set(kind, { run, logFile, ended });
     this.hooks.onStart?.(run, logFile);
     const finish = (patch: Partial<ScriptRun>) => {
       if (!run.running) return;
       Object.assign(run, patch, { running: false, endedAt: new Date().toISOString() });
+      settle(run);
       this.hooks.onExit?.(run);
     };
     const failed = (err: any) =>
@@ -142,8 +185,7 @@ export class ScriptRunner {
       const child = spawn(cmd.file, cmd.args, {
         cwd: dirname(script),
         stdio: ['ignore', fd, fd],
-        detached: true,
-        windowsHide: opts.windowsHide ?? true,
+        ...backgroundSpawn(),
         windowsVerbatimArguments: cmd.verbatim,
         env: opts.env,
       });
@@ -251,6 +293,64 @@ export async function readTail(file: string, max: number): Promise<{ text: strin
     // Starting mid-file can split a character or a line; drop the partial first line.
     if (start > 0) text = text.slice(text.indexOf('\n') + 1);
     return { text, truncated: start > 0 };
+  } finally {
+    await handle.close();
+  }
+}
+
+/** Bytes at the end of `buf` that start a UTF-8 character not complete in it. */
+function partialUtf8(buf: Buffer): number {
+  for (let back = 1; back <= Math.min(3, buf.length); back++) {
+    const b = buf[buf.length - back];
+    if ((b & 0xc0) === 0x80) continue; // a continuation byte: look further back
+    const need = b >= 0xf0 ? 4 : b >= 0xe0 ? 3 : b >= 0xc0 ? 2 : 1;
+    return need > back ? back : 0;
+  }
+  return 0;
+}
+
+export interface OutputChunk {
+  text: string;
+  /** Byte offset in the file where `text` starts. */
+  start: number;
+  /** Where the next read goes on from. */
+  next: number;
+  /** The file's size: start > 0 means the first part was not sent. */
+  size: number;
+}
+
+/**
+ * Output written since byte `from`, for the Tomcat page's console. `from` < 0 (a first read)
+ * or past the end (a new file of the same name) starts at the last `first` bytes instead, at a
+ * line start. At most `max` bytes are read; the rest comes with the next call. A character split
+ * by the end of what was written so far is left for the next call too.
+ */
+export async function readChunk(file: string, from: number, opts: { first?: number; max?: number } = {}): Promise<OutputChunk> {
+  const first = opts.first ?? 256 * 1024;
+  const max = opts.max ?? 512 * 1024;
+  let handle;
+  try {
+    handle = await fs.open(file, 'r');
+  } catch {
+    return { text: '', start: 0, next: 0, size: 0 };
+  }
+  try {
+    const { size } = await handle.stat();
+    let start = from >= 0 && from <= size ? from : Math.max(0, size - first);
+    const fresh = start !== from && start > 0;
+    const end = Math.min(size, start + max);
+    let buf = Buffer.alloc(end - start);
+    const { bytesRead } = await handle.read(buf, 0, buf.length, start);
+    buf = buf.subarray(0, bytesRead);
+    if (fresh) {
+      // Starting mid-file: from the next line on.
+      const nl = buf.indexOf(10);
+      const skip = nl < 0 ? buf.length : nl + 1;
+      buf = buf.subarray(skip);
+      start += skip;
+    }
+    buf = buf.subarray(0, buf.length - partialUtf8(buf));
+    return { text: buf.toString('utf8'), start, next: start + buf.length, size };
   } finally {
     await handle.close();
   }

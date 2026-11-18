@@ -988,7 +988,7 @@ function tomcatManagementFields(): HTMLElement[] {
       h(
         'span',
         {},
-        `Without scripts below, Start Tomcat runs its bin/${isWindows ? 'startup.bat' : 'startup.sh'} and Stop its bin/${isWindows ? 'shutdown.bat' : 'shutdown.sh'}, the traditional way, with CATALINA_HOME set to this folder and CATALINA_BASE to the folder above webapps. Leave empty to use the folder above webapps. A start or stop script overrides this.`,
+        `Without scripts below, Start Tomcat runs its bin/${isWindows ? 'catalina.bat' : 'catalina.sh'} run, with Tomcat’s output in the console on the Tomcat page instead of a window of its own, and Stop its bin/${isWindows ? 'shutdown.bat' : 'shutdown.sh'}, with CATALINA_HOME set to this folder and CATALINA_BASE to the folder above webapps. Leave empty to use the folder above webapps. A start or stop script overrides this.`,
       ),
     ),
     field(
@@ -1001,7 +1001,7 @@ function tomcatManagementFields(): HTMLElement[] {
       'tomcat.startScript',
       'Start script',
       fileInput('tomcat.startScript', 'Choose the script that starts Tomcat', 'Tomcat’s own startup'),
-      'Optional. Run by Start Tomcat instead of Tomcat’s startup, in its own folder. It may also keep Tomcat in the foreground.',
+      'Optional. Run by Start Tomcat instead of Tomcat’s own, in its own folder. Its output shows in the console on the Tomcat page; if it keeps Tomcat in the foreground (catalina run), so does Tomcat’s.',
     ),
     field('tomcat.stopScript', 'Stop script', fileInput('tomcat.stopScript', 'Choose the script that stops Tomcat', 'Tomcat’s own shutdown'), 'Optional. Run by Stop Tomcat instead of Tomcat’s shutdown.'),
     field(

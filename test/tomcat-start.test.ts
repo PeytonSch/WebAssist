@@ -78,18 +78,19 @@ describe('Tomcat home and base', () => {
   });
 
   it('says which way Start and Stop run, and what is missing', () => {
-    const m = machine(['C:\\tomcat\\bin\\startup.bat', 'C:\\tomcat\\bin\\shutdown.bat', 'C:\\tomcat\\conf\\server.xml'], 'win32', { Path: 'C:\\Windows' });
+    const m = machine(['C:\\tomcat\\bin\\catalina.bat', 'C:\\tomcat\\bin\\shutdown.bat', 'C:\\tomcat\\conf\\server.xml'], 'win32', { Path: 'C:\\Windows' });
     const own = launchPlan(tomcat({ webappsDir: 'C:\\tomcat\\webapps' }), m);
-    expect(own.info.start).toEqual({ how: 'tomcat', path: 'C:\\tomcat\\bin\\startup.bat' });
+    // catalina run: Tomcat in the foreground, its output in the console rather than a window.
+    expect(own.info.start).toEqual({ how: 'tomcat', path: 'C:\\tomcat\\bin\\catalina.bat', args: ['run'] });
     expect(own.info.stop).toEqual({ how: 'tomcat', path: 'C:\\tomcat\\bin\\shutdown.bat' });
-    // startup.bat insists on JAVA_HOME or JRE_HOME.
+    // catalina.bat insists on JAVA_HOME or JRE_HOME.
     expect(own.info.warnings.join(' ')).toMatch(/Neither JAVA_HOME nor JRE_HOME/);
     expect(own.env).toMatchObject({ CATALINA_HOME: 'C:\\tomcat', CATALINA_BASE: 'C:\\tomcat', Path: 'C:\\Windows' });
 
-    const withJava = launchPlan(tomcat({ webappsDir: 'C:\\tomcat\\webapps', javaHome: 'C:\\jdk17' }), machine(['C:\\tomcat\\bin\\startup.bat', 'C:\\tomcat\\bin\\shutdown.bat', 'C:\\jdk17\\bin\\java.exe'], 'win32'));
+    const withJava = launchPlan(tomcat({ webappsDir: 'C:\\tomcat\\webapps', javaHome: 'C:\\jdk17' }), machine(['C:\\tomcat\\bin\\catalina.bat', 'C:\\tomcat\\bin\\shutdown.bat', 'C:\\jdk17\\bin\\java.exe'], 'win32'));
     expect(withJava.info).toMatchObject({ javaHome: 'C:\\jdk17', javaSource: 'settings', warnings: [] });
 
-    const fromEnv = launchPlan(tomcat({ webappsDir: 'C:\\tomcat\\webapps' }), machine(['C:\\tomcat\\bin\\startup.bat'], 'win32', { java_home: 'C:\\jdk21' }));
+    const fromEnv = launchPlan(tomcat({ webappsDir: 'C:\\tomcat\\webapps' }), machine(['C:\\tomcat\\bin\\catalina.bat'], 'win32', { java_home: 'C:\\jdk21' }));
     expect(fromEnv.info).toMatchObject({ javaHome: 'C:\\jdk21', javaSource: 'environment', warnings: [] });
     expect(fromEnv.info.stop.how).toBe('none');
     expect(fromEnv.info.problems).toEqual(['Tomcat’s shutdown.bat was not found in C:\\tomcat\\bin.']);
@@ -106,7 +107,7 @@ describe('Tomcat home and base', () => {
     expect(env).toEqual({ Path: 'C:\\Windows', CATALINA_HOME: 'C:\\tomcat', CATALINA_BASE: 'D:\\base', JAVA_HOME: 'C:\\jdk17' });
     expect(tomcatEnv({ PATH: '/bin' }, { home: '/opt/tomcat', base: null, javaHome: '' }, 'linux')).toEqual({ PATH: '/bin', CATALINA_HOME: '/opt/tomcat' });
     expect(catalinaScript('C:/tomcat', 'stop', 'win32')).toBe('C:\\tomcat\\bin\\shutdown.bat');
-    expect(catalinaScript('/opt/tomcat', 'start', 'linux')).toBe('/opt/tomcat/bin/startup.sh');
+    expect(catalinaScript('/opt/tomcat', 'start', 'linux')).toBe('/opt/tomcat/bin/catalina.sh');
   });
 });
 
@@ -256,9 +257,9 @@ describe.skipIf(process.platform === 'win32')('Start Tomcat', () => {
     mkdirSync(join(dir, 'tomcat', 'bin'), { recursive: true });
     mkdirSync(join(dir, 'tomcat', 'conf'), { recursive: true });
     mkdirSync(join(dir, 'tomcat', 'webapps'), { recursive: true });
-    writeFileSync(join(dir, 'tomcat', 'bin', 'startup.sh'), '#!/bin/sh\necho "home=$CATALINA_HOME base=$CATALINA_BASE java=$JAVA_HOME"\n');
+    writeFileSync(join(dir, 'tomcat', 'bin', 'catalina.sh'), '#!/bin/sh\necho "$1: home=$CATALINA_HOME base=$CATALINA_BASE java=$JAVA_HOME"\n');
     writeFileSync(join(dir, 'tomcat', 'bin', 'shutdown.sh'), '#!/bin/sh\necho stopping\n');
-    chmodSync(join(dir, 'tomcat', 'bin', 'startup.sh'), 0o755);
+    chmodSync(join(dir, 'tomcat', 'bin', 'catalina.sh'), 0o755);
   }
   function service(over: Partial<Config['tomcat']>, events: HubEvent[] = []) {
     const cfg: Config = structuredClone(DEFAULT_CONFIG);
@@ -268,16 +269,16 @@ describe.skipIf(process.platform === 'win32')('Start Tomcat', () => {
     return new TomcatService(cfg, { emit: (e) => events.push(e), onWar: () => undefined }, { scriptLogDir: join(dir, 'slogs'), commandLogDir: join(dir, 'clogs'), commandWaitMs: 3000 });
   }
 
-  it('runs Tomcat’s own startup.sh with CATALINA_HOME, CATALINA_BASE and JAVA_HOME', async () => {
+  it('runs Tomcat’s own catalina.sh run with CATALINA_HOME, CATALINA_BASE and JAVA_HOME', async () => {
     fakeTomcat();
     const svc = service({ javaHome: '/opt/jdk' });
     const st = await svc.state();
-    expect(st.launch).toMatchObject({ start: { how: 'tomcat', path: join(dir, 'tomcat', 'bin', 'startup.sh') }, home: join(dir, 'tomcat'), homeSource: 'webapps' });
+    expect(st.launch).toMatchObject({ start: { how: 'tomcat', path: join(dir, 'tomcat', 'bin', 'catalina.sh'), args: ['run'] }, home: join(dir, 'tomcat'), homeSource: 'webapps' });
     await svc.startTomcat();
     await svc.startSequence!.done;
     await until(async () => (await svc.state()).scripts.start?.running === false);
     const out = (await svc.state()).scripts.start!.output;
-    expect(out).toContain(`home=${join(dir, 'tomcat')} base=${join(dir, 'tomcat')} java=/opt/jdk`);
+    expect(out).toContain(`run: home=${join(dir, 'tomcat')} base=${join(dir, 'tomcat')} java=/opt/jdk`);
     // shutdown.sh is not executable: run through sh.
     const stop = await svc.runScript('stop');
     expect(stop.command).toContain('/bin/sh');

@@ -1,10 +1,11 @@
 import type { KeepComparePreview } from '../shared/keepmerge';
-import type { AppFolder, CommandRun, DeleteItem, LaunchWay, ScriptKind, ScriptRun, StartCommandInfo, StartStep, TomcatState, WarInfo, WebappAction, WebappInfo } from '../shared/tomcat';
+import type { AppFolder, CommandRun, DeleteItem, LaunchWay, RestartState, ScriptKind, StartCommandInfo, StartStep, TomcatState, WarInfo, WebappAction, WebappInfo } from '../shared/tomcat';
 import { $, fmtBytes, h, type Child } from './dom';
 import { confirmStopOwnTomcat, hostedNote, onHubMachine, SELF_WHY } from './hosted';
 import { packageNoticeCount, packageNotices, packagesCard, syncPackages } from './registry';
 import { KeepFiles } from './keepfiles';
 import { closeSettings, openSettings, settingsOpen } from './settings';
+import { TomcatConsole } from './tomcatconsole';
 
 /**
  * The Tomcat page: start and stop the server (with the user's scripts or Tomcat's own, along with
@@ -136,7 +137,10 @@ async function refresh(): Promise<void> {
 function schedule(): void {
   clearTimeout(T.timer);
   if (!T.open) return;
-  const running = !!(T.state?.scripts.start?.running || T.state?.scripts.stop?.running || T.state?.sequence?.running);
+  // Faster while something is under way; a Tomcat running in the foreground is not that (its output is in the console).
+  const start = T.state?.scripts.start;
+  const starting = !!start?.running && (!start.foreground || Date.now() - Date.parse(start.startedAt) < 60_000);
+  const running = !!(starting || T.state?.scripts.stop?.running || T.state?.sequence?.running || T.state?.restart?.running);
   T.timer = window.setTimeout(async () => {
     if (!document.hidden) await refresh();
     schedule();
@@ -179,6 +183,14 @@ const scriptAction = (kind: ScriptKind, only = false) =>
     await api(`/api/tomcat/server/${kind}${self ? '?self=1' : ''}`, kind === 'start' ? { only } : {});
     return self ? 'Stopping Tomcat, and Debug Hub with it. Start Tomcat yourself to get this page back.' : undefined;
   });
+
+const restartTomcat = () =>
+  act('script:restart', async () => {
+    await api('/api/tomcat/server/restart', {});
+    return undefined;
+  }, 'Restarting…');
+
+const killTomcat = () => act('script:kill', async () => (await api('/api/tomcat/server/kill', {})).message, 'Ending Tomcat…');
 
 const runCommand = (c: StartCommandInfo) =>
   act(`cmd:${c.index}`, async () => {
@@ -293,44 +305,55 @@ function stateBadge(state: WebappInfo['state']): HTMLElement {
   return h('span', { class: `tm-state ${state}`, title: STATE_HELP[state] }, STATE_LABEL[state]);
 }
 
-function scriptPanel(s: TomcatState): HTMLElement | null {
-  const runs = [s.scripts.start, s.scripts.stop].filter((r): r is ScriptRun => !!r);
-  if (!runs.length) return null;
-  const run = runs.sort((a, b) => (a.startedAt < b.startedAt ? 1 : -1))[0];
-  let status: Child;
-  if (run.error) status = h('span', { class: 'tm-run error' }, `Could not run: ${run.error}`);
-  else if (run.running) {
-    const secs = (Date.now() - Date.parse(run.startedAt)) / 1000;
-    status = h(
-      'span',
-      { class: 'tm-run running' },
-      `Running${run.pid ? ` (process ${run.pid})` : ''}`,
-      secs > 10 ? ' · probably Tomcat itself, in the foreground. Closing Debug Hub leaves it running.' : '',
-    );
-  } else {
-    const ok = run.exitCode === 0;
-    status = h('span', { class: `tm-run ${ok ? 'ok' : 'error'}` }, `Finished ${run.endedAt ? `at ${time(run.endedAt)} ` : ''}with ${run.exitCode != null ? `exit code ${run.exitCode}` : `signal ${run.signal}`}`);
+const RESTART_PHASE: Record<RestartState['phase'], string> = {
+  stopping: 'Stopping Tomcat…',
+  waiting: 'Waiting for Tomcat to stop…',
+  starting: 'Starting Tomcat…',
+  done: 'Restarted Tomcat',
+  failed: 'Restart failed',
+};
+
+/** How Restart is getting on, while it runs and for a little while after. */
+function restartPanel(s: TomcatState): HTMLElement | null {
+  const r = s.restart;
+  if (!r) return null;
+  const recent = r.endedAt && Date.now() - Date.parse(r.endedAt) < 20_000;
+  if (!r.running && !recent && r.phase !== 'failed') return null;
+  if (r.running) {
+    return h('div', { class: 'tm-restart running', role: 'status' }, h('span', { class: 'spinner', 'aria-hidden': 'true' }), h('b', {}, RESTART_PHASE[r.phase]), h('span', { class: 'muted' }, `started ${time(r.startedAt)}`));
   }
-  const out = h('pre', { class: 'code tm-output' }, (run.outputTruncated ? '…\n' : '') + (run.output || '(no output yet)'));
-  return h(
-    'div',
-    { class: 'tm-script-run' },
-    h('div', { class: 'tm-run-head' }, h('b', {}, `${run.kind === 'start' ? 'Start' : 'Stop'}: ${fileName(run.script)}`), h('span', { class: 'muted' }, `started ${time(run.startedAt)}`), status),
-    h('code', { class: 'tm-cmd', title: 'The command that was run' }, run.command),
-    out,
-  );
+  return h('div', { class: `tm-restart ${r.phase}`, role: 'status' }, h('b', {}, r.phase === 'done' ? `Restarted Tomcat at ${time(r.endedAt!)}` : r.message ?? RESTART_PHASE.failed));
+}
+
+let tconsole: TomcatConsole | null = null;
+function theConsole(): TomcatConsole {
+  tconsole ??= new TomcatConsole({ kill: () => killTomcat() });
+  return tconsole;
+}
+
+/** Tomcat's output (and its shutdown's and the start commands'), like a terminal. */
+function consoleCard(s: TomcatState): HTMLElement {
+  const l = s.launch;
+  const desc =
+    l.start.how === 'tomcat'
+      ? 'What Tomcat prints, running in the foreground with catalina run; the shutdown and start commands beside it.'
+      : l.start.how === 'script'
+        ? 'What your start script prints (all of Tomcat’s output, if it keeps Tomcat in the foreground), the stop script and start commands.'
+        : 'Tomcat’s output once it is started from here.';
+  return foldCard('console', 'Console', null, desc, null, theConsole().el);
 }
 
 /** Which way Start or Stop runs: the user's script, or Tomcat's own one in its bin folder. */
 function launchLabel(s: TomcatState, way: LaunchWay): HTMLElement {
   if (way.how === 'script') return h('span', { class: 'tm-how' }, 'Your script ', h('code', { class: 'tm-dir', title: way.path ?? '' }, way.path ?? ''));
   if (way.how === 'tomcat') {
-    return h('span', { class: 'tm-how' }, `Tomcat’s bin/${fileName(way.path ?? '')} in `, h('code', { class: 'tm-dir', title: s.launch.home ?? '' }, s.launch.home ?? ''));
+    const args = way.args?.length ? ` ${way.args.join(' ')}` : '';
+    return h('span', { class: 'tm-how' }, `Tomcat’s bin/${fileName(way.path ?? '')}${args} in `, h('code', { class: 'tm-dir', title: s.launch.home ?? '' }, s.launch.home ?? ''));
   }
   return h('span', { class: 'muted' }, 'Not set up');
 }
 
-/** CATALINA_BASE and JAVA_HOME, when Tomcat's own scripts are used: what startup.bat will be given. */
+/** CATALINA_BASE and JAVA_HOME, when Tomcat's own scripts are used: what catalina.bat will be given. */
 function launchDetails(s: TomcatState): HTMLElement | null {
   const l = s.launch;
   if (l.start.how !== 'tomcat' && l.stop.how !== 'tomcat') return null;
@@ -351,11 +374,16 @@ function serverCard(s: TomcatState): HTMLElement {
     const run = s.scripts[kind];
     // Debug Hub runs inside this Tomcat: it is running, so there is nothing to start.
     const ownRunning = kind === 'start' && !!s.hosted;
-    const busy = T.busy.has(`script:${kind}`) || !!run?.running || (kind === 'start' && seqRunning) || ownRunning;
+    const restarting = !!s.restart?.running || T.busy.has('script:restart');
+    const busy = T.busy.has(`script:${kind}`) || !!run?.running || (kind === 'start' && seqRunning) || ownRunning || restarting;
     const label = kind === 'start' ? 'Start Tomcat' : 'Stop Tomcat';
     const what = way.how === 'script' ? way.path : way.how === 'tomcat' ? `Tomcat’s ${fileName(way.path ?? '')}` : '';
     const why = ownRunning
       ? 'This Tomcat is running: Debug Hub runs inside it'
+      : restarting
+      ? 'Tomcat is being restarted'
+      : run?.running && run.foreground
+      ? 'Tomcat is running. Restart starts it afresh.'
       : run?.running
       ? 'The last run has not finished yet'
       : kind === 'start' && seqRunning
@@ -365,9 +393,24 @@ function serverCard(s: TomcatState): HTMLElement {
           : kind === 'start' && hasExtras
             ? `Runs the start commands, then ${what}${s.settings.startChrome ? ', then starts Chrome' : ''}`
             : `Runs ${what}`;
-    const buttons: HTMLElement[] = [
+    const buttons: HTMLElement[] = [];
+    if (kind === 'stop') {
+      // Restart: stop, wait until Tomcat is gone, start Tomcat alone.
+      const cannot = s.launch.start.how === 'none' || way.how === 'none';
+      buttons.push(
+        button(restarting ? 'Restarting…' : 'Restart', () => void restartTomcat(), {
+          disabled: cannot || restarting || seqRunning || !!s.hosted || T.busy.has('script:stop'),
+          title: s.hosted
+            ? 'Debug Hub runs inside this Tomcat, so it cannot restart it'
+            : cannot
+              ? 'Set the Tomcat folder or scripts in Settings › Tomcat server'
+              : 'Stop Tomcat, wait until it has stopped, and start it again (without the start commands or Chrome)',
+        }),
+      );
+    }
+    buttons.push(
       button(T.busy.has(`script:${kind}`) ? 'Running…' : label, () => void scriptAction(kind), { primary: kind === 'start', disabled: way.how === 'none' || busy, title: why }),
-    ];
+    );
     if (kind === 'start' && hasExtras) {
       buttons.push(button('Tomcat only', () => void scriptAction('start', true), { disabled: way.how === 'none' || busy, title: 'Start Tomcat without the start commands or Chrome' }));
     }
@@ -380,9 +423,15 @@ function serverCard(s: TomcatState): HTMLElement {
     );
   };
   const mgr = s.manager;
-  const tools = mgr.configured
-    ? h('span', { class: `collector ${mgr.ok ? 'connected' : 'off'}`, title: mgr.error ?? s.settings.managerUrl }, mgr.ok ? 'Manager connected' : 'Manager unreachable')
-    : null;
+  const fg = s.scripts.start?.running && s.scripts.start.foreground ? s.scripts.start : null;
+  const tools = h(
+    'div',
+    { class: 'card-status' },
+    fg ? h('span', { class: 'collector connected', title: `Started from here at ${time(fg.startedAt)}` }, `Tomcat running${fg.pid ? ` · process ${fg.pid}` : ''}`) : null,
+    mgr.configured
+      ? h('span', { class: `collector ${mgr.ok ? 'connected' : 'off'}`, title: mgr.error ?? s.settings.managerUrl }, mgr.ok ? 'Manager connected' : 'Manager unreachable')
+      : null,
+  );
   const body: Child[] = [hostedNote(s), row('start'), row('stop'), launchDetails(s), ...problemNotes(['startScript', 'stopScript'])];
   const l = s.launch;
   if (l.start.how === 'none' && l.stop.how === 'none' && !l.home) {
@@ -391,7 +440,7 @@ function serverCard(s: TomcatState): HTMLElement {
     for (const text of [...l.problems, ...l.warnings]) body.push(h('div', { class: 'tm-note warn' }, text, ' ', settingsLink('Fix in Settings')));
   }
   if (mgr.configured && !mgr.ok && mgr.error) body.push(h('div', { class: 'tm-note warn' }, mgr.error));
-  body.push(sequencePanel(s), commandsPanel(s), scriptPanel(s));
+  body.push(restartPanel(s), sequencePanel(s), commandsPanel(s));
   return card('server', 'Server', 'Start and stop Tomcat, and the rest of your dev setup with it.', tools, ...body);
 }
 
@@ -543,8 +592,9 @@ function webappRow(s: TomcatState, app: WebappInfo): HTMLElement {
     h('div', { class: 'tm-name' }, h('b', {}, app.name), ...kinds.map((k) => h('span', { class: 'tm-tag' }, k)), self ? h('span', { class: 'tm-tag self', title: SELF_WHY }, 'Debug Hub') : null),
     path,
     h('div', {}, stateBadge(app.state), app.sessions ? h('span', { class: 'muted tm-sessions' }, `${app.sessions} session${app.sessions === 1 ? '' : 's'}`) : null),
-    h('span', { class: 'muted', title: app.modified ? new Date(app.modified).toLocaleString() : '' }, [ago(app.modified), fmtBytes(app.bytes)].filter(Boolean).join(' · ')),
-    h('div', { class: 'tm-actions' }, busyNote(`app:${app.name}`), ...actions),
+    // While an action runs, the spinner takes the place beside the buttons.
+    busyNote(`app:${app.name}`) ?? h('span', { class: 'muted', title: app.modified ? new Date(app.modified).toLocaleString() : '' }, [ago(app.modified), fmtBytes(app.bytes)].filter(Boolean).join(' · ')),
+    h('div', { class: 'tm-actions' }, ...actions),
   );
 }
 
@@ -625,13 +675,17 @@ function render(): void {
     content.replaceChildren(...[banner, h('div', { class: 'settings-loading' }, T.loadError ? `Could not load: ${T.loadError}` : 'Loading…')].filter((x): x is HTMLElement => !!x));
     return;
   }
-  // Keep the script output scrolled to its end, unless the user scrolled up to read.
-  const oldOut = content.querySelector<HTMLElement>('.tm-output');
-  const stick = !oldOut || oldOut.scrollTop + oldOut.clientHeight >= oldOut.scrollHeight - 8;
-  const focusedLabel = (document.activeElement as HTMLElement | null)?.closest('.tomcat') ? document.activeElement?.textContent : null;
-  content.replaceChildren(...[banner, serverCard(s), webappsCard(s), disabledCard(s), warsCard(s), packagesCard(!!s.settings.webappsDir)].filter((x): x is HTMLElement => !!x));
-  const out = content.querySelector<HTMLElement>('.tm-output');
-  if (out) out.scrollTop = stick ? out.scrollHeight : (oldOut?.scrollTop ?? 0);
+  // The console is kept across redraws: its output, and where it is scrolled to.
+  const con = theConsole();
+  const consoleFocused = con.el.contains(document.activeElement);
+  const focusedInConsole = consoleFocused ? (document.activeElement as HTMLElement) : null;
+  con.detach();
+  const focusedLabel = !consoleFocused && (document.activeElement as HTMLElement | null)?.closest('.tomcat') ? document.activeElement?.textContent : null;
+  content.replaceChildren(...[banner, serverCard(s), consoleCard(s), webappsCard(s), disabledCard(s), warsCard(s), packagesCard(!!s.settings.webappsDir)].filter((x): x is HTMLElement => !!x));
+  con.update(s.consoles, T.open && !collapsed.has('console'));
+  con.attached();
+  // Moving the console out and back took the focus from it.
+  if (consoleFocused && focusedInConsole?.isConnected) focusedInConsole.focus({ preventScroll: true });
   // A re-render replaces the buttons; keep keyboard focus roughly where it was.
   if (focusedLabel) [...content.querySelectorAll<HTMLElement>('button')].find((b) => b.textContent === focusedLabel)?.focus({ preventScroll: true });
 }
@@ -1039,6 +1093,7 @@ export function closeTomcat(): void {
   if (!T.open) return;
   T.open = false;
   clearTimeout(T.timer);
+  tconsole?.setActive(false);
   document.querySelector<HTMLDialogElement>('dialog.tm-deploy')?.close();
   document.querySelector<HTMLDialogElement>('dialog.tm-delete')?.close();
   root().hidden = true;

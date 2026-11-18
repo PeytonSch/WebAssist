@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { CommandRun } from '../../shared/tomcat';
 import type { StartCommand } from '../config';
-import { readTail, type ScriptCommand } from './scripts';
+import { backgroundSpawn, readTail, type ScriptCommand } from './scripts';
 import { TomcatError } from './webapps';
 
 /**
@@ -112,6 +112,12 @@ export class CommandRunner {
     return [...this.runs.values()].filter((r) => r.run.running && !keys.has(keyOf(r.run))).map((r) => r.run);
   }
 
+  /** A run and the file its output goes to. */
+  get(id: number): { run: CommandRun; logFile: string } | null {
+    const r = this.runs.get(id);
+    return r ? { run: r.run, logFile: r.logFile } : null;
+  }
+
   ended(id: number): Promise<CommandEnd> {
     const r = this.runs.get(id);
     if (!r) throw new TomcatError('No such command run.', 404);
@@ -170,10 +176,9 @@ export class CommandRunner {
       const child = spawn(shell.file, shell.args, {
         cwd: c.cwd,
         stdio: ['ignore', fd, fd],
-        // Outlives Debug Hub, and on other systems leads its own process group so Stop can end all of it.
-        detached: true,
-        // No console window per command: the output is on the timeline and the Tomcat page.
-        windowsHide: true,
+        // Outlives Debug Hub without a console window of its own: the output is on the timeline
+        // and the Tomcat page's console. Elsewhere it leads its own process group, so Stop can end all of it.
+        ...backgroundSpawn(this.platform),
         windowsVerbatimArguments: shell.verbatim,
       });
       run.pid = child.pid ?? null;
