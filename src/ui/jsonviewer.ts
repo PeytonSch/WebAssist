@@ -1143,6 +1143,9 @@ function suggestList(input: HTMLInputElement, root: () => JNode | null, apply: (
   return { el, close };
 }
 
+const IS_MAC = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform);
+const QUERY_KEY = IS_MAC ? '⌘L' : 'Ctrl+L';
+
 function renderShell(): void {
   const d = doc();
   const parent = V.stack.length > 1 ? V.stack[V.stack.length - 2] : null;
@@ -1169,7 +1172,8 @@ function renderShell(): void {
 
   const query = h('input', {
     type: 'text', class: 'jv-input', placeholder: 'data.items[*].price   ..id   items[?(@.price > 10)]', spellcheck: 'false', autocomplete: 'off',
-    'aria-label': 'Path query', title: 'Show only part of the document. Names and [index], * for all, ..name at any depth, [?(@.key == "x")] to filter. Enter to apply.',
+    'aria-label': 'Path query', 'aria-keyshortcuts': `${IS_MAC ? 'Meta' : 'Control'}+L P`,
+    title: `Show only part of the document. Names and [index], * for all, ..name at any depth, [?(@.key == "x")] to filter. Enter to apply.\nShortcut: ${QUERY_KEY} or P`,
   }) as HTMLInputElement;
   query.value = d.query;
   let qTimer = 0;
@@ -1232,7 +1236,7 @@ function renderShell(): void {
 
   const tools = h('div', { class: 'jv-tools' },
     h('div', { class: 'jv-seg', role: 'group', 'aria-label': 'View' }, modes.tree, modes.table, modes.raw),
-    h('div', { class: 'jv-field jv-query' }, h('span', { class: 'jv-label' }, 'Path'), query, clearQuery, suggest.el),
+    h('div', { class: 'jv-field jv-query' }, h('span', { class: 'jv-label' }, 'Path'), query, h('kbd', { class: 'jv-key', 'aria-hidden': 'true', title: `${QUERY_KEY} or P` }, QUERY_KEY), clearQuery, suggest.el),
     queryStatus,
     h('div', { class: 'jv-field jv-search' }, searchIn,
       button('↑', 'Previous match (Shift+Enter)', () => nextMatch(-1), 'jv-clear'),
@@ -1289,6 +1293,13 @@ function showDoc(): void {
   renderSearchStatus();
   focusMain();
   if (d.mode === 'tree') requestAnimationFrame(() => U?.tree.reveal(V.selIdx, true));
+}
+
+/** Puts the caret in the path query, its text selected so typing replaces it. */
+function focusQuery(): void {
+  if (!U || U.query.disabled) return;
+  U.query.focus();
+  U.query.select();
 }
 
 function focusMain(): void {
@@ -1378,11 +1389,20 @@ export function initJsonViewer(opts: { onToggle: (open: boolean) => void }): voi
       U?.search.select();
       return;
     }
+    // Ctrl+L (⌘L), like a browser's address bar: the path query.
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 'l') {
+      e.preventDefault();
+      focusQuery();
+      return;
+    }
     if (typing || e.ctrlKey || e.metaKey || e.altKey) return;
     if (e.key === '/') {
       e.preventDefault();
       U?.search.focus();
       U?.search.select();
+    } else if (e.key === 'p' || e.key === 'P') {
+      e.preventDefault();
+      focusQuery();
     } else if (e.key === 'n' || e.key === 'N') {
       nextMatch(e.key === 'n' ? 1 : -1);
     }

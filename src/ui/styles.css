@@ -958,6 +958,7 @@ details.raw summary {
 .keys { display: grid; grid-template-columns: auto 1fr; gap: 9px 16px; margin: 0; align-items: center; }
 .keys dt { color: var(--text-2); white-space: nowrap; }
 .keys dd { margin: 0; }
+.keys-head { margin: 18px 0 10px; font-size: 12px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
 
 /* Go to source: which file, when several define the class; and why opening failed. */
 .src-choose { width: min(560px, 92vw); }
@@ -1773,6 +1774,9 @@ details.raw summary .jv-open { margin-left: 10px; text-transform: none; letter-s
 .jv-field:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
 .jv-field.invalid { border-color: var(--error); }
 .jv-query { flex: 1 1 340px; }
+/* The shortcut, shown until the field has the focus. */
+.jv-key { flex: none; margin-right: 4px; font-size: 10.5px; opacity: 0.8; }
+.jv-query:focus-within .jv-key { display: none; }
 .jv-search { flex: 0 1 280px; padding-left: 8px; }
 /* .jv-field draws the focus ring, so the input itself needs none. */
 .jv-field .jv-input { flex: 1; min-width: 60px; border: 0; outline: none; background: none; color: var(--text); font: 12px var(--mono); }
