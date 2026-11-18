@@ -9,6 +9,7 @@ import { bodyLang, highlight, paint, type Lang, type Token } from './highlight';
 import { findJsonIn } from './jsonmodel';
 import { closeJsonViewer, initJsonViewer, jsonViewerOpen, openJsonViewer, type JsonSource } from './jsonviewer';
 import { closeMetrics, initMetrics, metricsChanged, metricsOpen, openMetrics } from './metrics';
+import { onRegistryMessage } from './registry';
 import { initSettings, openSettings, settingsOpen, updateSettingsStatus } from './settings';
 import { firstOwnRef, initSource, linkSources, openSource, setSourceContext, showError } from './source';
 import { durationOf, failedOf, groupOf, isSender, isStatic, levelOf, RANK, resOf, ridOf, routeWith, statusOf, typeOf, webappOf, type Group, type Row } from './rows';
@@ -1320,6 +1321,7 @@ function connect(): void {
     const msg = JSON.parse(e.data) as ServerMessage;
     if (msg.type === 'status') onStatus(msg.status);
     else if (msg.type === 'war') onWarNotice(msg.war);
+    else if (msg.type === 'registry') onRegistryMessage(msg);
     else if (state.mode === 'live' && msg.session === state.session) ingest(msg.events);
   };
   ws.onclose = () => {

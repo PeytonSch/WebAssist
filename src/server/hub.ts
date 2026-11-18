@@ -8,6 +8,8 @@ import { folderSource } from './collectors/logsdir';
 import type { TailSource } from './collectors/tail';
 import type { Config } from './config';
 import { makeEvent } from './normalize';
+import type { RegistryMessage } from '../shared/registry';
+import { RegistryService } from './registry/service';
 import { SourceService } from './source/service';
 import { SessionStore } from './store';
 import { Webapps } from './webapps';
@@ -18,6 +20,8 @@ type Listener = {
   onStatus: () => void;
   /** A new WAR is ready to deploy (Tomcat page). */
   onWar?: (war: WarInfo) => void;
+  /** Package registries: something changed, a new version, a download's progress. */
+  onRegistry?: (msg: RegistryMessage) => void;
 };
 
 /** Wires collectors to the session store and to whoever is listening (the web UI). */
@@ -34,6 +38,8 @@ export class Hub {
   api: ApiClient;
   /** Go to source: the source index and the editor. */
   source: SourceService;
+  /** Package registries (Nexus and the like) as a source of WARs for the Tomcat page. */
+  registry: RegistryService;
 
   constructor(public cfg: Config) {
     this.store = new SessionStore(cfg.sessionsDir);
@@ -41,9 +47,16 @@ export class Hub {
     this.tomcat = new TomcatService(cfg, {
       emit: (ev) => this.emit(ev),
       onWar: (war) => this.listeners.forEach((l) => l.onWar?.(war)),
+      onDeployed: (file, name) => this.registry.deployed(file, name),
     });
     this.api = new ApiClient(cfg, (ev) => this.emit(ev));
     this.source = new SourceService(cfg);
+    this.registry = new RegistryService(cfg, {
+      emit: (ev) => this.emit(ev),
+      notify: (msg) => this.listeners.forEach((l) => l.onRegistry?.(msg)),
+      webappNames: () => this.tomcat.appNames(),
+      adoptWar: (file) => this.tomcat.adoptWar(file),
+    });
   }
 
   private build(): void {
@@ -93,10 +106,12 @@ export class Hub {
     this.logs.forEach((l) => l.start());
     this.tomcat.start();
     this.source.start();
+    this.registry.start();
   }
 
   async stop(): Promise<void> {
     this.started = false;
+    this.registry.stop();
     this.source.stop();
     await this.tomcat.stop();
     await this.stopCollectors();
@@ -123,6 +138,7 @@ export class Hub {
     this.tomcat.reconfigure(this.cfg);
     this.api.reconfigure(this.cfg);
     this.source.reconfigure(this.cfg);
+    this.registry.reconfigure(this.cfg);
     if (this.started) {
       this.chrome?.start();
       this.webapps?.start();

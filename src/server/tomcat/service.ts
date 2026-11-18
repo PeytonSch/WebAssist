@@ -1,4 +1,4 @@
-import { access } from 'node:fs/promises';
+import { access, stat } from 'node:fs/promises';
 import { basename, isAbsolute, relative } from 'node:path';
 import type { HubEvent, Level } from '../../shared/types';
 import type { AppFolder, CommandRun, KeepPreview, ScriptKind, ScriptRun, StartSequence, TomcatState, WarInfo, WebappAction, WebappInfo } from '../../shared/tomcat';
@@ -23,6 +23,8 @@ export interface TomcatHooks {
   emit: (ev: HubEvent) => void;
   /** A new or rebuilt WAR is ready to deploy. */
   onWar: (war: WarInfo) => void;
+  /** A WAR was deployed as a webapp (the package registries note what is deployed from them). */
+  onDeployed?: (file: string, name: string) => void;
 }
 
 export interface TomcatServiceOptions {
@@ -257,6 +259,25 @@ export class TomcatService {
       target: guessTarget(w.file, names),
       fresh: w.fresh,
     };
+  }
+
+  /** The names in the webapps folder, and those plus the disabled ones. */
+  async appNames(): Promise<{ deployed: string[]; all: string[] }> {
+    const { webapps, disabled } = await this.disk();
+    const deployed = webapps.map((a) => a.name);
+    return { deployed, all: [...deployed, ...disabled.map((a) => a.name)] };
+  }
+
+  /**
+   * Accepts a WAR from outside the watch folders (a download from a package registry): from
+   * here on it can be deployed, shown in the file manager and have files kept, like a watched
+   * one. Only the hub calls this, never a request.
+   */
+  async adoptWar(file: string): Promise<WarInfo> {
+    const st = await stat(file);
+    const war: WatchedWar = { file, bytes: st.size, modifiedMs: st.mtimeMs, sig: `${st.size}:${Math.round(st.mtimeMs)}`, fresh: false };
+    this.watcher.adopt(war);
+    return this.warInfo(war, (await this.appNames()).all);
   }
 
   async wars(): Promise<WarInfo[]> {
@@ -641,6 +662,7 @@ export class TomcatService {
       removed = await removeApp(name, disabledDir);
     }
     this.watcher.settle(file);
+    this.hooks.onDeployed?.(file, name);
     const path = contextPath(name);
     const keptNote = rewrite ? ` Kept ${keptSummary(rewrite)} from the deployed copy.` : '';
     this.note('info', `Deployed ${basename(file)} as ${name}.war (${path})${replaced ? ', replacing the previous build' : ''}.${keptNote}`, {

@@ -4,6 +4,8 @@ sessions/
 examples/.demo-logs/
 examples/sessions/
 debug-hub.config.json
+registry-state.json
+registry-cache/
 *.log
 out/
 release/
