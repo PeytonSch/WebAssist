@@ -434,7 +434,10 @@ Hub. Set it up under Settings → Tomcat server; the page says what is missing.
   are what the deploy will change in your file.
   - **Add new settings from the build** takes every block that only adds lines and leaves your
     lines alone. That is the usual job: pick up new options, keep local values. A setting whose
-    value differs is a block of its own, so one default can be taken without the rest.
+    value differs is a block of its own, so one default can be taken without the rest. It works
+    on lines, not on the file's structure: when the build's file is laid out very differently
+    from yours, a new setting can land under the wrong parent. The format check below the panes
+    says so before you apply.
   - In the gutter of the new build: **«** takes the block into the result (Alt+B), the middle
     button keeps your lines and adds the build's below (Alt+A), **✕** leaves the result as it is
     there (Alt+K). In the gutter of the deployed copy: **»** puts the deployed lines back

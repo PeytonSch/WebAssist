@@ -1060,7 +1060,7 @@ function tomcatManagementFields(): HTMLElement[] {
         {},
         'File names, ',
         h('code', {}, '*'),
-        ' allowed. When deploying a WAR, Debug Hub offers to keep these files from the deployed copy (anywhere in the webapp) instead of the ones in the new build, e.g. local settings you edited there.',
+        ' allowed. When deploying a WAR, Debug Hub offers to keep these files from the deployed copy (anywhere in the webapp) instead of the ones in the new build, e.g. local settings you edited there. It also shows which settings the new build adds to them, and can merge the two.',
       ),
     ),
   ];
