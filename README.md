@@ -47,9 +47,10 @@ that error on the timeline.
 **Tomcat control.** Start your whole dev setup with one button (database, dev server, then
 Tomcat, with your scripts or Tomcat's own `startup`), start, stop, disable and delete
 webapps, and get a notice when a WAR finishes building, with a one-click deploy that keeps your
-local `config.yaml`, `config.js` and `log4j2.xml`. WARs that are built elsewhere come from
-package registries (Nexus, Artifactory, any Maven repository, a CI server's URL): new versions
-are announced the same way, and any version can be downloaded and deployed.
+local `config.yaml`, `config.js` and `log4j2.xml`, tells you which settings the new build adds
+to them, and merges the two side by side. WARs that are built elsewhere come from package
+registries (Nexus, Artifactory, any Maven repository, a CI server's URL): new versions are
+announced the same way, and any version can be downloaded and deployed.
 
 ![The Tomcat page after Start Tomcat ran two start commands and Tomcat's startup script, with a new-WAR notice](docs/images/tomcat.png)
 
@@ -407,11 +408,64 @@ Hub. Set it up under Settings → Tomcat server; the page says what is missing.
   it. **Show in Explorer** (Finder on macOS, the folder elsewhere) opens where a WAR was built.
 - **Keeping local files.** If the copy being replaced (its unpacked folder, else its WAR, else
   its disabled copy) has files named in `tomcat.preserveFiles` anywhere in it (not under
-  `WEB-INF/lib` or `node_modules`), the deploy dialog offers to keep them, ticked by default,
-  listing each path. They are written into the new WAR before Tomcat sees it (replacing the
+  `WEB-INF/lib` or `node_modules`), the deploy dialog lists them under **Local config files**,
+  each compared with the new build's file of the same path:
+  - *The same as the new build's*, *only in the deployed copy*, or different. For a different
+    file the dialog says what the build brings, by setting: `3 new settings in this build:
+    mail.smtp.timeout, features.newSearch and cache (2)`, which settings the build no longer
+    has, and how many values differ. Settings are read from YAML, JSON, `.properties`/INI and
+    XML (element and attribute paths, e.g. `Loggers/Logger[com.shop]@level`), and as far as
+    they can be made out from JavaScript config files (assignments and object literals); other
+    files are compared by lines. Files with new settings come first and are marked.
+  - Per file you choose **Keep deployed** (the default, as before), **Use new build**, or
+    **Merge…**, which opens the merge view below; a merged file then shows as **Merged** and
+    **Edit merge…** reopens it. **Keep all** and **Use new build for all** set every file.
+
+  Kept and merged files are written into the new WAR before Tomcat sees it (replacing the
   build's file or added), so the webapp starts with your config. The build itself is not
   changed. ZIP64 (over 4 GB) and encrypted WARs cannot be rewritten; deploy those without
   keeping files.
+- **Merging a config file.** The merge view shows three panes, as IntelliJ IDEA's merge window
+  does: the **deployed copy** (yours, read-only), the **result** (editable; it starts as the
+  deployed copy) and the **new build**'s file (read-only). Blocks are green where lines were
+  added, blue where they changed (with the changed words marked) and grey where they were
+  removed; ribbons join each block to its place in the next pane, and the three scroll together.
+  The ribbons on the right are what the build has that the result does not; those on the left
+  are what the deploy will change in your file.
+  - **Add new settings from the build** takes every block that only adds lines and leaves your
+    lines alone. That is the usual job: pick up new options, keep local values. A setting whose
+    value differs is a block of its own, so one default can be taken without the rest.
+  - In the gutter of the new build: **«** takes the block into the result (Alt+B), the middle
+    button keeps your lines and adds the build's below (Alt+A), **✕** leaves the result as it is
+    there (Alt+K). In the gutter of the deployed copy: **»** puts the deployed lines back
+    (Alt+R). **Use deployed** and **Use new build** set the whole file. The shortcuts act on the
+    current change: the one stepped to, or the one the caret is in.
+  - **F7** / **Shift+F7** (and the arrow buttons) step through the changes; the counter reads
+    `2 of 7 changes · 3 unresolved`, where unresolved are differences from the build neither
+    taken nor set aside. The strip at the far right shows where the changes are; click it to
+    go there. The chips under the toolbar list the new settings and tick them off as the result
+    gets them; a click shows the setting.
+  - The result is a text editor: type, select, cut and paste, Tab and Shift+Tab indent, Enter
+    keeps the indentation, Ctrl+Z / Ctrl+Y undo and redo typing and buttons alike. It is
+    compared again as you type, so the colours always show the result as it is. **Esc** leaves
+    the editor for the next pane (Tab then reaches its buttons); Esc again closes, asking first
+    if there are changes.
+  - **Ignore whitespace** treats lines that differ only in spaces as the same; **Collapse
+    unchanged** hides long stretches that are the same in all three (click one to open it).
+  - **Apply** (Ctrl+Enter) hands the result to the deploy dialog. If it no longer reads as
+    YAML, JSON or XML (or sets a key twice), that is shown while you edit and asked about on
+    Apply, but not refused. The result is stored the way the deployed file is: its line endings
+    (CRLF or LF), byte order mark and encoding (UTF-8, or ISO-8859-1 for files that are not
+    UTF-8); the final line break is as you leave it.
+  - Files over 1 MB or 20,000 lines, binary files and UTF-16 text are not merged: the dialog
+    says why and offers Keep deployed and Use new build only. A deploy is refused (nothing is
+    changed) if the deployed file or the WAR's file changed after the merge view read them;
+    open the merge again.
+
+  For scripts: `GET /api/tomcat/keep/compare?name=&file=` returns the comparison,
+  `GET /api/tomcat/keep/file?name=&file=&path=` both texts, and `POST /api/tomcat/deploy`
+  takes `merged: [{ path, text, deployedHash?, buildHash? }]` next to `keep: [paths]`. Only
+  paths the search for kept files finds are accepted.
 
 ## Package registries
 
@@ -552,7 +606,7 @@ written with forward slashes or pasted as they are (`C:\Users\me\logs`).
 | `tomcat.startChrome` | `false` | Start Tomcat also starts Chrome with its debugging port, last. |
 | `tomcat.manager` | | Optional Tomcat Manager login: `{ "url": "http://localhost:8080/manager/text", "username": …, "password": … }`. The password is stored as plain text. |
 | `tomcat.warWatch` | `[]` | Folders where WARs are built; `*` matches any folder name, e.g. `C:/dev/*/target`. |
-| `tomcat.preserveFiles` | `["config.yaml", "config.js", "log4j2.xml"]` | File names (`*` allowed) a deploy can keep from the deployed copy instead of the new build's. |
+| `tomcat.preserveFiles` | `["config.yaml", "config.js", "log4j2.xml"]` | File names (`*` allowed) a deploy can keep from the deployed copy, or merge with the new build's, instead of taking the new build's. |
 | `postgres.enabled`, `postgres.logs` | `false`, `[]` | Postgres server logs. |
 | `tail.fromStart` | `false` | Read existing log content at startup, not only new lines. |
 | `redact.headers` | `authorization, proxy-authorization, cookie, set-cookie` | Header values replaced with `[redacted]` before writing. |
