@@ -952,7 +952,7 @@ function renderSide(): void {
 }
 
 const keysHint = () => h('div', { class: 'jv-hint jv-keys' },
-  '↑ ↓ move · → ← open and close · * open all below · Ctrl+C copy value · / find · N next match · Esc back');
+  '↑ ↓ move · → ← open and close · * open all below · Ctrl+C copy value · / find · P path · N next match · Esc back');
 
 function sideValue(n: JNode): HTMLElement {
   const pre = h('pre', { class: 'code jv-value' });
