@@ -2383,3 +2383,74 @@ body.metrics-open #main { display: none; }
 .tm-tag.self { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); font-weight: 600; cursor: help; }
 .tm-stop-self { width: min(440px, 92vw); }
 .tm-stop-self p { margin: 0 0 8px; line-height: 1.5; }
+/* ── Package registries ──────────────────────────────── */
+/* The Packages card and its notices on the Tomcat page (src/ui/registry.ts), and Settings › Package
+   registries (src/ui/registrysettings.ts). Everything for the feature is in this one block. */
+
+.pkg-reg { padding: 6px 0 4px; }
+.pkg-reg + .pkg-reg { margin-top: 6px; border-top: 1px solid var(--border-strong); }
+.pkg-reg-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; padding: 8px 0 6px; min-width: 0; }
+.pkg-reg-head b { font-weight: 600; }
+.pkg-reg-head .tm-dir { min-width: 0; font-size: 11.5px; }
+.pkg-when { margin-left: auto; font-size: 12px; white-space: nowrap; }
+.pkg-when.checking { color: var(--accent); }
+.pkg-reg > .tm-note { margin: 4px 0 8px; overflow-wrap: anywhere; }
+.pkg-reg > .tm-missing { padding: 6px 0 10px; }
+/* A wider version list than the state column the other rows have there, and one or two buttons. */
+.tm-row.tm-pkg { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 230px minmax(0, 1.1fr) 230px; }
+.tm-pkg.fresh { background: linear-gradient(90deg, var(--accent-soft), transparent 60%); }
+.pkg-coords { font: 11.5px var(--mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+select.input.pkg-version { width: 100%; height: 28px; padding: 0 24px 0 8px; font: 12px var(--mono); }
+.pkg-status { display: flex; flex-direction: column; gap: 1px; font-size: 12px; }
+.pkg-progress { display: flex; flex-direction: column; gap: 5px; font-size: 12px; color: var(--text-2); font-variant-numeric: tabular-nums; }
+.pkg-bar { height: 4px; border-radius: 2px; background: var(--border); overflow: hidden; }
+.pkg-bar i { display: block; height: 100%; width: 0; border-radius: 2px; background: var(--accent); transition: width 0.15s linear; }
+.pkg-progress.unknown .pkg-bar i { width: 35%; animation: pkg-slide 1.1s ease-in-out infinite alternate; }
+@keyframes pkg-slide { from { transform: translateX(-20%); } to { transform: translateX(205%); } }
+.war-notice .pkg-progress { margin-top: 4px; }
+.toast.pkg-toast { max-width: min(640px, 90vw); z-index: 30; }
+.toast.pkg-toast.error { background: var(--error); color: #fff; }
+:root[data-theme="dark"] .toast.pkg-toast.error { color: #0b0d12; }
+
+.reg-card { gap: 10px; }
+.reg-head { display: grid; grid-template-columns: 30px minmax(0, 1fr) 190px auto; gap: 8px; align-items: start; }
+.reg-head .sc-num { padding-top: 8px; }
+.reg-head .btn-icon { font-size: 17px; }
+.reg-about { margin: 0; color: var(--text-2); font-size: 12px; line-height: 1.5; }
+.reg-lines { display: flex; flex-direction: column; gap: 10px; }
+.reg-line { display: grid; grid-template-columns: 110px minmax(0, 1fr); gap: 4px 10px; align-items: start; }
+.reg-label { padding-top: 7px; color: var(--text-2); font-size: 12px; font-weight: 550; }
+.reg-control { min-width: 0; display: flex; flex-direction: column; gap: 5px; }
+.reg-card .input { width: 100%; }
+.reg-card .input.num { width: 90px; }
+.reg-card .input-unit .list-row { flex: none; }
+.reg-login { display: flex; flex-direction: column; gap: 6px; }
+.reg-login > select.input { width: auto; max-width: 260px; align-self: flex-start; }
+.reg-pair { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 6px; }
+.reg-entry { display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); }
+.reg-entry:has(.list-row.invalid) { border-color: var(--error); }
+.reg-entry-main { display: flex; gap: 8px; align-items: flex-start; }
+.reg-entry-main .btn-icon { flex: none; margin-top: 19px; font-size: 17px; }
+.reg-entry-field { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.reg-entry-field.wide { flex: 3; }
+.reg-entry-field > span:first-child { color: var(--text-2); font-size: 11.5px; font-weight: 550; }
+.reg-entry-field .field-help { margin-top: 0; font-size: 11.5px; }
+.reg-entry-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 8px 10px; }
+.reg-more > summary { width: fit-content; color: var(--accent); font-size: 12px; cursor: pointer; user-select: none; }
+.reg-more[open] > summary { margin-bottom: 8px; }
+.reg-test-note { font-size: 12px; }
+.reg-test .pm b { font-weight: 600; }
+@media (max-width: 960px) {
+  .tm-row.tm-pkg { grid-template-columns: minmax(0, 1fr) 190px auto; }
+}
+@media (max-width: 760px) {
+  .reg-head { grid-template-columns: 30px minmax(0, 1fr) auto; }
+  .reg-head > .list-row:nth-child(3) { grid-column: 2; grid-row: 2; }
+  .reg-line { grid-template-columns: 1fr; }
+  .reg-label { padding-top: 0; }
+  .reg-entry-main { flex-wrap: wrap; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .pkg-bar i { transition: none; }
+  .pkg-progress.unknown .pkg-bar i { animation: none; width: 100%; opacity: 0.4; }
+}

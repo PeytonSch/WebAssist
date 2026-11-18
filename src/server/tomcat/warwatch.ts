@@ -120,6 +120,8 @@ export class WarWatcher {
   private baseline = true;
   /** Builds a replaced watcher had reported and the user has not dealt with yet, by file. */
   private inherited = new Map<string, string>();
+  /** WARs accepted from elsewhere, by file. See adopt(). */
+  private adopted = new Map<string, WatchedWar>();
   problems: { pattern: string; problem: string }[] = [];
 
   constructor(private patterns: string[], private opts: WarWatchOptions) {}
@@ -143,7 +145,15 @@ export class WarWatcher {
   }
 
   get(file: string): WatchedWar | undefined {
-    return this.known.get(file);
+    return this.known.get(file) ?? this.adopted.get(file);
+  }
+
+  /**
+   * Accepts a WAR from outside the watch folders (a download from a package registry), so it
+   * can be deployed like a watched one. It is not listed among the builds.
+   */
+  adopt(war: WatchedWar): void {
+    this.adopted.set(war.file, war);
   }
 
   /** The user dealt with this build: deployed or dismissed. */
@@ -155,6 +165,7 @@ export class WarWatcher {
   /** Carries the fresh marks over from a watcher this one replaces, for builds that have not changed. */
   inherit(previous: WarWatcher): void {
     this.inherited = new Map(previous.list().filter((w) => w.fresh).map((w) => [w.file, w.sig]));
+    this.adopted = new Map(previous.adopted);
   }
 
   /**

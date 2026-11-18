@@ -1,6 +1,7 @@
 import type { AppFolder, CommandRun, DeleteItem, KeepPreview, LaunchWay, ScriptKind, ScriptRun, StartCommandInfo, StartStep, TomcatState, WarInfo, WebappAction, WebappInfo } from '../shared/tomcat';
 import { $, fmtBytes, h, type Child } from './dom';
 import { confirmStopOwnTomcat, hostedNote, onHubMachine, SELF_WHY } from './hosted';
+import { packageNoticeCount, packageNotices, packagesCard, syncPackages } from './registry';
 import { closeSettings, openSettings, settingsOpen } from './settings';
 
 /**
@@ -550,7 +551,7 @@ function render(): void {
   const oldOut = content.querySelector<HTMLElement>('.tm-output');
   const stick = !oldOut || oldOut.scrollTop + oldOut.clientHeight >= oldOut.scrollHeight - 8;
   const focusedLabel = (document.activeElement as HTMLElement | null)?.closest('.tomcat') ? document.activeElement?.textContent : null;
-  content.replaceChildren(...[banner, serverCard(s), webappsCard(s), disabledCard(s), warsCard(s)].filter((x): x is HTMLElement => !!x));
+  content.replaceChildren(...[banner, serverCard(s), webappsCard(s), disabledCard(s), warsCard(s), packagesCard(!!s.settings.webappsDir)].filter((x): x is HTMLElement => !!x));
   const out = content.querySelector<HTMLElement>('.tm-output');
   if (out) out.scrollTop = stick ? out.scrollHeight : (oldOut?.scrollTop ?? 0);
   // A re-render replaces the buttons; keep keyboard focus roughly where it was.
@@ -910,11 +911,13 @@ function renderNotices(): void {
     more.addEventListener('click', () => openTomcat());
     cards.push(h('div', { class: 'war-notice more' }, more));
   }
-  host.replaceChildren(...cards);
+  // New versions in the package registries (src/ui/registry.ts) are announced in the same stack.
+  host.replaceChildren(...cards, ...packageNotices(Math.max(1, MAX_NOTICES - cards.length)));
   const badge = document.querySelector('#btn-tomcat .badge') as HTMLElement | null;
+  const count = all.length + packageNoticeCount();
   if (badge) {
-    badge.textContent = String(all.length);
-    badge.hidden = all.length === 0;
+    badge.textContent = String(count);
+    badge.hidden = count === 0;
   }
 }
 
@@ -965,6 +968,7 @@ export function onWarNotice(war: WarInfo): void {
 
 /** Picks up builds announced while this page was closed or disconnected. */
 export async function syncWarNotices(): Promise<void> {
+  void syncPackages();
   try {
     syncNoticesFrom(await api<WarInfo[]>('/api/tomcat/wars'));
   } catch {
@@ -1029,3 +1033,7 @@ export function initTomcat(opts: { onToggle: (open: boolean) => void }): void {
   renderNotices();
   void syncWarNotices();
 }
+
+// ── For the Packages card and its notices (src/ui/registry.ts) ──
+// They are part of this page and look like the rest of it, so they are built from its parts.
+export { ago, api, button, card, missing, openDeploy, renderNotices };

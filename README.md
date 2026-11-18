@@ -47,7 +47,9 @@ that error on the timeline.
 **Tomcat control.** Start your whole dev setup with one button (database, dev server, then
 Tomcat, with your scripts or Tomcat's own `startup`), start, stop, disable and delete
 webapps, and get a notice when a WAR finishes building, with a one-click deploy that keeps your
-local `config.yaml`, `config.js` and `log4j2.xml`.
+local `config.yaml`, `config.js` and `log4j2.xml`. WARs that are built elsewhere come from
+package registries (Nexus, Artifactory, any Maven repository, a CI server's URL): new versions
+are announced the same way, and any version can be downloaded and deployed.
 
 ![The Tomcat page after Start Tomcat ran two start commands and Tomcat's startup script, with a new-WAR notice](docs/images/tomcat.png)
 
@@ -411,6 +413,63 @@ Hub. Set it up under Settings → Tomcat server; the page says what is missing.
   changed. ZIP64 (over 4 GB) and encrypted WARs cannot be rewritten; deploy those without
   keeping files.
 
+## Package registries
+
+WARs that are not built on your machine can be deployed from a package registry. Add
+registries under Settings → Package registries; the Tomcat page then has a **Packages** list
+below the WAR builds. Three kinds of registry cover most setups:
+
+| Kind | `type` | Use it for | How it finds versions |
+|---|---|---|---|
+| Maven repository | `maven` | Nexus 2 and 3, Artifactory, GitLab and GitHub package registries, a plain web folder: anything Maven itself can read. Give the repository's root URL and each package's group and artifact ID. | `maven-metadata.xml` next to the artifact; for a `-SNAPSHOT`, the metadata in its folder names the latest timestamped build. |
+| Nexus 3 search | `nexus3` | Finding every WAR in a Nexus Repository 3 repository without listing each one, and raw (non-Maven) repositories. Give the server's URL and a repository name. | `GET /service/rest/v1/search/assets`, all pages. For a large Maven repository, add `maven.extension=war` to the search's extra parameters so Nexus leaves out poms and jars. |
+| Direct URL | `url` | One fixed address per WAR, e.g. a CI server's "last successful build" artifact. | A `HEAD` request (a `GET` for the first byte where `HEAD` is refused): a change in ETag, Last-Modified or size is a new build. |
+
+- **Login and transport.** Per registry: no login, a user name and password (Basic), a token
+  (Bearer), and any extra headers (`X-JFrog-Art-Api`, `PRIVATE-TOKEN`, …). For a registry whose
+  https certificate is signed by your company's own certificate authority, give that
+  authority's certificate as a PEM file (`caFile`); **Allow untrusted certificates** accepts
+  anything and is the last resort. Redirects are followed, and the login and extra headers are
+  sent only to the host a request starts at, never to a host it is redirected to (blob storage
+  behind the registry). HTTP proxies are not supported: the registry has to be reachable
+  directly.
+- **Secrets.** Logins are stored in `debug-hub.config.json` as plain text, like the Tomcat
+  Manager password. To keep one out of the file, write `${env:NAME}` in its place (in a
+  password, token, user name, header value or URL): Debug Hub reads the environment variable
+  `NAME` of its own process when it starts, and the registry is listed with an error if it is
+  not set. Passwords, tokens and header values are never written to the timeline, the state
+  file or an error message.
+- **Test connection** (in Settings, saved or not) tries the registry and says what it found
+  for each package, e.g. `com.example:shop: 12 versions, latest 2.4.1`, or what is wrong: no
+  login or a wrong one (401), not allowed (403), not found (404, with what to check), host
+  not found, connection refused, timeout, an untrusted certificate, or a login page where a
+  registry was expected. With no packages yet, a Nexus 3 lists its repositories.
+- **Checking.** Each registry is checked when Debug Hub starts and then every
+  `checkMinutes` (default 15; 0 turns automatic checks off), and with **Check now**. Versions
+  are ordered as Maven orders them (`1.10` after `1.9`, `2.0-RC1` before `2.0`), and each
+  package can be limited to releases or snapshots and to a version pattern (`2.*`, or a
+  `/regular expression/`). What is there at the first check is taken as known. A version that
+  appears later, or a SNAPSHOT or URL that is rebuilt, raises the same notice a freshly built
+  WAR does, on every screen, once, also when it appeared while Debug Hub was not running.
+  Dismiss it, or deploy it, and it is settled. Problems are shown per registry in the Packages
+  list and noted on the timeline when they change.
+- **Download & deploy.** Pick a version (the latest, or an older one to roll back) and the
+  WAR is downloaded to `registry-cache/` next to the settings file, with progress and a
+  Cancel. It is checked against the registry's checksum when there is one (the `.sha256`,
+  `.sha1` or `.md5` file of a Maven repository, the checksum in a Nexus 3 search result) and
+  must be a zip archive; a download that fails either check is deleted, not deployed. The
+  ordinary deploy dialog then opens on the downloaded file, so the webapp name, a disabled
+  copy and the files to keep work as for a local WAR. The name is `deployAs` if set, else the
+  package's name matched against the webapps there are. The Packages list shows what was last
+  deployed from each package. Per package the three newest downloads and the deployed one are
+  kept; older ones are deleted.
+- **State.** `registry-state.json` next to the settings file remembers which versions have
+  been seen, announced and deployed, and what is in the cache. Deleting it only makes every
+  package start over as known.
+
+Not covered: Artifactory's own search (AQL) and storage API (use its Maven layout), npm,
+Docker and other non-WAR formats, proxies, and client certificates.
+
 ## Collectors
 
 **Chrome.** Attaches to a running browser over CDP, and does not enable the Debugger domain,
@@ -507,12 +566,59 @@ written with forward slashes or pasted as they are (`C:\Users\me\logs`).
 | `api.timeoutMs` | `30000` | How long an API request may take. |
 | `api.addRequestId` | `true` | Send `correlation.header` with a fresh ID on API requests, unless the request sets it. |
 | `api.insecureTls` | `false` | Accept self-signed and otherwise untrusted https certificates on API requests. |
+| `registries` | `[]` | Package registries checked for WARs: see [Package registries](#package-registries) and the example below. Logins are **stored as plain text** unless written as `${env:NAME}`. |
 | `editor.kind` | (empty) | Go to source: `vscode`, `idea`, `emacs`, `nvim` or `custom`. Empty: off. |
 | `editor.program` | (empty) | The editor's program. Empty: found on `PATH` and in the usual install places. |
 | `editor.nvimReuse` | `true` | Neovim: open files in a running nvim instead of a new window. |
 | `editor.terminal` | `wezterm start --cwd {dir} -- {cmd}` | Neovim: the command that opens a terminal window running `{cmd}`. |
 | `editor.custom` | (empty) | Custom editor: a command with `{file}` `{line}` `{column}` `{dir}`. |
 | `editor.sourceDirs` | `[]` | Project folders to index besides those found above `tomcat.warWatch`. |
+
+A registry of each kind:
+
+```json
+"registries": [
+  {
+    "name": "Nexus",
+    "type": "maven",
+    "url": "https://nexus.example.com/repository/maven-public",
+    "auth": { "type": "basic", "username": "ci", "password": "${env:NEXUS_PASSWORD}" },
+    "caFile": "certs/company-root-ca.pem",
+    "checkMinutes": 15,
+    "packages": [
+      { "groupId": "com.example", "artifactId": "shop", "versions": "releases", "deployAs": "shop" },
+      { "groupId": "com.example", "artifactId": "admin", "classifier": "prod", "versionPattern": "2.*" }
+    ]
+  },
+  {
+    "name": "Nightlies",
+    "type": "nexus3",
+    "url": "https://nexus.example.com",
+    "auth": { "type": "bearer", "token": "${env:NEXUS_TOKEN}" },
+    "packages": [{ "repository": "maven-snapshots", "group": "com.example", "params": "maven.extension=war" }]
+  },
+  {
+    "name": "CI",
+    "type": "url",
+    "url": "https://ci.example.com",
+    "headers": [{ "name": "PRIVATE-TOKEN", "value": "${env:CI_TOKEN}" }],
+    "packages": [{ "name": "reports", "url": "job/reports/lastSuccessfulBuild/artifact/target/reports.war", "deployAs": "reports" }]
+  }
+]
+```
+
+| Registry key | Default | Meaning |
+|---|---|---|
+| `name` | | Shown in the UI; what its remembered state is kept under. Unique. |
+| `type` | `maven` | `maven`, `nexus3` or `url`. |
+| `url` | | `maven`: the repository's root. `nexus3`: the server. `url`: optional base for relative package URLs. |
+| `auth` | `{ "type": "none" }` | `{ "type": "basic", "username", "password" }` or `{ "type": "bearer", "token" }`. |
+| `headers` | `[]` | Extra headers sent to the registry: `{ "name", "value" }`. |
+| `caFile` | (empty) | PEM file of the certificate authority that signed the registry's certificate. Relative to the config file. |
+| `insecureTls` | `false` | Accept any https certificate from this registry. |
+| `timeoutMs` | `30000` | How long to wait for an answer, and for a download to move on. |
+| `checkMinutes` | `15` | How often to look for new versions; `0`: only with Check now. |
+| `packages` | `[]` | `maven`: `groupId`, `artifactId`. `nexus3`: `repository`, optional `group`, `name`, `params`. `url`: `name`, `url`. All: `deployAs`. `maven` and `nexus3` also: `classifier`, `extension` (`war`), `versions` (`all`, `releases`, `snapshots`), `versionPattern`. |
 
 ## Sessions and privacy
 
@@ -525,6 +631,10 @@ Treat them like application logs.
 
 API client requests are recorded like browser requests: credential headers redacted, bodies
 kept up to `maxBodyBytes`.
+
+Package registry logins are plain text in `debug-hub.config.json` unless written as
+`${env:NAME}`; keep real credentials out of files you share. `registry-state.json` and
+`registry-cache/` hold no logins.
 
 The API rejects requests whose `Host` is not `localhost` or `127.0.0.1`, and requests from
 other origins, so another site open in your browser cannot read a session. Inside Tomcat the

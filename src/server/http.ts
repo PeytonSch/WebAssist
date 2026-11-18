@@ -13,6 +13,7 @@ import type { HostedServer } from './hosted/server';
 import type { Hub } from './hub';
 import { LiveStreams } from './live';
 import { detectSetup } from './setup-detect';
+import { registryRoute } from './registry/routes';
 import { sourceRoute } from './source/routes';
 import { tomcatRoute } from './tomcat/routes';
 
@@ -63,6 +64,8 @@ export function startServer(hub: Hub, uiDir: string, opts: ServerOptions): Promi
   const configDir = dirname(opts.configFile);
   // "Also start Chrome" on the Tomcat page starts it as the Start Chrome button does.
   hub.tomcat.chromeStarter = () => startChrome(hub.cfg, configDir);
+  // What is known about packages, and their downloads, live next to the settings file.
+  hub.registry.useDataDir(configDir);
   // Saved API requests live next to the settings file.
   const catalog = new CatalogStore(join(configDir, CATALOG_FILE));
   // Saves run one at a time, so two quick saves cannot interleave their reconfigures.
@@ -189,6 +192,7 @@ export function startServer(hub: Hub, uiDir: string, opts: ServerOptions): Promi
       }
 
       if (await tomcatRoute(hub.tomcat, req, res, path, json, readBody)) return;
+      if (await registryRoute(hub.registry, req, res, path, json, readBody)) return;
       if (await sourceRoute(hub.source, req, res, path, json, readBody)) return;
       if (await apiClientRoute(() => hub.cfg, hub.api, catalog, req, res, path, json, readBody)) return;
 
@@ -253,6 +257,7 @@ export function startServer(hub: Hub, uiDir: string, opts: ServerOptions): Promi
       broadcast({ type: 'status', status: hub.status() });
     },
     onWar: (war) => broadcast({ type: 'war', war }),
+    onRegistry: (msg) => broadcast(msg),
   });
   // Keeps the event counter in the UI honest between status changes.
   setInterval(() => broadcast({ type: 'status', status: hub.status() }), 5000).unref();

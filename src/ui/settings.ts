@@ -8,6 +8,7 @@ import type { HubStatus } from '../shared/types';
 import { CHROME_LAUNCH_EVENT, chromeButton, chromeLaunchNote } from './chrome';
 import { $, fmtBytes, h, type Child } from './dom';
 import { decorateSettings, type Detected } from './hosted';
+import { registryFields } from './registrysettings';
 import { guideOpen, openSetupGuide } from './setupguide';
 
 /**
@@ -746,6 +747,14 @@ function sections(): SectionDef[] {
       title: 'Tomcat server',
       desc: 'For the Tomcat page: starting and stopping Tomcat (with the rest of your dev setup) and its webapps, disabling webapps, and deploying the WARs you build.',
       fields: tomcatManagementFields,
+    },
+    {
+      // Built in src/ui/registrysettings.ts.
+      id: 'registries',
+      nav: 'Package registries',
+      title: 'Package registries',
+      desc: 'For WARs that are not built on this machine: Debug Hub looks in Nexus, Artifactory, any Maven repository or at a fixed URL for new versions, and the Tomcat page downloads and deploys them.',
+      fields: () => registryFields({ get: getPath, change, clearError, slots: S.errorSlots, field }),
     },
     {
       id: 'source',

@@ -1,5 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, resolve } from 'node:path';
+import type { RegistryConfig } from '../shared/registry';
+import { resolveRegistryPaths, validateRegistries } from './registry/config';
 import { checkTemplate, DEFAULT_TERMINAL, type EditorKind } from './source/editor';
 
 export interface Config {
@@ -96,6 +98,12 @@ export interface Config {
      */
     fetchCommand: string;
   };
+  /**
+   * Package registries (Nexus and the like) checked for WARs to deploy, besides the local
+   * tomcat.warWatch folders. See src/shared/registry.ts. Logins are plain text in the file,
+   * unless written as ${env:NAME}.
+   */
+  registries: RegistryConfig[];
 }
 
 export interface EditorConfig {
@@ -186,6 +194,7 @@ export const DEFAULT_CONFIG: Config = {
     addRequestId: true,
   },
   updates: { fetchCommand: '' },
+  registries: [],
   editor: {
     kind: '',
     program: '',
@@ -265,6 +274,7 @@ export function resolvePaths(config: Config, base: string): Config {
   const program = config.editor.program;
   if (program && /[\\/]/.test(program) && !isAbsolute(program) && !/^[a-zA-Z]:/.test(program)) config.editor.program = abs(program);
   config.editor.sourceDirs = config.editor.sourceDirs.map(abs);
+  config.registries = resolveRegistryPaths(config.registries, abs);
   // Spec files, not URLs, are relative to the settings file like every other path.
   // A hand-edited file is not validated on load, so skip entries that are not { name, url }.
   const specs: unknown[] = Array.isArray(config.api?.specs) ? config.api.specs : [];
@@ -472,6 +482,8 @@ export function validateConfig(input: unknown): { config: Config; errors: FieldE
 
   const up: Record<string, unknown> = isObj(config.updates) ? config.updates : {};
   config.updates = { fetchCommand: template('updates.fetchCommand', up.fetchCommand, 'Fetch command', []) };
+
+  config.registries = validateRegistries(config.registries, errors);
 
   /** The API client's settings. Error paths name the row, e.g. api.specs.1.url. */
   function apiClient(v: unknown): ApiClientConfig {

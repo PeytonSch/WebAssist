@@ -1,3 +1,4 @@
+import type { RegistryMessage } from './registry';
 import type { WarInfo } from './tomcat';
 
 /** 'client' is the API screen's requests, sent by the hub. */
@@ -42,4 +43,6 @@ export type ServerMessage =
   | { type: 'events'; session: string; events: HubEvent[] }
   | { type: 'status'; status: HubStatus }
   /** A WAR in a watched folder was built or rebuilt and can be deployed. */
-  | { type: 'war'; war: WarInfo };
+  | { type: 'war'; war: WarInfo }
+  /** Package registries: something changed, a new version, a download's progress. */
+  | RegistryMessage;
