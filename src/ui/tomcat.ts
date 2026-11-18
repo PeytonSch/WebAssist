@@ -24,8 +24,11 @@ const T = {
   state: null as TomcatState | null,
   stateJson: '',
   loadError: null as string | null,
-  /** Keys of actions in flight: "app:shop", "script:start", "war:<file>", "cmd:<index>", "run:<id>". */
-  busy: new Set<string>(),
+  /**
+   * Actions in flight, by key ("app:shop", "script:start", "war:<file>", "cmd:<index>", "run:<id>"),
+   * with what to show beside a spinner meanwhile ("Reloading…").
+   */
+  busy: new Map<string, string>(),
   banner: null as { kind: 'error' | 'info'; text: string } | null,
   timer: 0,
   /** New WARs announced and not yet deployed or dismissed, by file. */
@@ -141,8 +144,8 @@ function schedule(): void {
 }
 
 /** Runs an action, shows its outcome in the banner and reloads the state. */
-async function act(key: string, run: () => Promise<string | undefined>): Promise<void> {
-  T.busy.add(key);
+async function act(key: string, run: () => Promise<string | undefined>, doing = 'Working…'): Promise<void> {
+  T.busy.set(key, doing);
   if (T.open) render();
   try {
     const message = await run();
@@ -156,8 +159,16 @@ async function act(key: string, run: () => Promise<string | undefined>): Promise
   }
 }
 
+const DOING: Record<WebappAction, string> = { start: 'Starting…', stop: 'Stopping…', reload: 'Reloading…', disable: 'Disabling…', enable: 'Enabling…' };
+
 const webappAction = (app: WebappInfo, action: WebappAction) =>
-  act(`app:${app.name}`, async () => (await api(`/api/tomcat/webapps/${encodeURIComponent(app.name)}/${action}`, {})).message);
+  act(`app:${app.name}`, async () => (await api(`/api/tomcat/webapps/${encodeURIComponent(app.name)}/${action}`, {})).message, DOING[action]);
+
+/** A spinner and what is happening, shown beside a row's buttons while its action runs. */
+function busyNote(key: string): HTMLElement | null {
+  const doing = T.busy.get(key);
+  return doing ? h('span', { class: 'tm-busy', role: 'status' }, h('span', { class: 'spinner', 'aria-hidden': 'true' }), doing) : null;
+}
 
 const scriptAction = (kind: ScriptKind, only = false) =>
   act(`script:${kind}`, async () => {
@@ -468,7 +479,7 @@ function webappRow(s: TomcatState, app: WebappInfo): HTMLElement {
     path,
     h('div', {}, stateBadge(app.state), app.sessions ? h('span', { class: 'muted tm-sessions' }, `${app.sessions} session${app.sessions === 1 ? '' : 's'}`) : null),
     h('span', { class: 'muted', title: app.modified ? new Date(app.modified).toLocaleString() : '' }, [ago(app.modified), fmtBytes(app.bytes)].filter(Boolean).join(' · ')),
-    h('div', { class: 'tm-actions' }, ...actions),
+    h('div', { class: 'tm-actions' }, busyNote(`app:${app.name}`), ...actions),
   );
 }
 
@@ -641,7 +652,7 @@ async function openDelete(app: WebappInfo): Promise<void> {
     ok.textContent = 'Deleting…';
     error.textContent = '';
     const key = `app:${app.name}`;
-    T.busy.add(key);
+    T.busy.set(key, 'Deleting…');
     if (T.open) render();
     try {
       const { message } = await api('/api/tomcat/delete', { name: app.name, from, items: items.map((i) => i.name) });
@@ -772,7 +783,7 @@ async function openDeploy(war: WarInfo): Promise<void> {
     ok.disabled = true;
     ok.textContent = 'Deploying…';
     const key = `war:${war.file}`;
-    T.busy.add(key);
+    T.busy.set(key, 'Deploying…');
     try {
       const name = input.value.trim();
       // The name was just edited: find out what there is to keep for it before deploying.

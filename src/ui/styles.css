@@ -1371,7 +1371,11 @@ pre.code.tm-output { max-height: 280px; white-space: pre-wrap; }
 }
 .card-body > .tm-row:first-child, .tm-note + .tm-row { border-top: 0; }
 .tm-row > * { min-width: 0; overflow-wrap: anywhere; }
-.tm-row.busy { opacity: 0.6; }
+/* Busy: the row fades, but not the spinner saying what is happening. */
+.tm-row.busy > :not(.tm-actions) { opacity: 0.55; }
+.tm-row.busy .tm-actions .btn { opacity: 0.6; }
+.tm-busy { display: inline-flex; align-items: center; gap: 7px; margin-right: 4px; color: var(--accent); font-size: 12px; font-weight: 550; white-space: nowrap; }
+.tm-busy .spinner { flex: none; }
 .tm-name { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .tm-name b { font-weight: 600; }
 .tm-path { font: 12px var(--mono); color: var(--text-2); }
