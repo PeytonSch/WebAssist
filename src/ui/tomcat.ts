@@ -190,13 +190,78 @@ const stopRun = (run: CommandRun) => act(`run:${run.id}`, async () => (await api
 
 // ── Page ────────────────────────────────────────────────
 
+// Sections can be folded away; which ones are remembered.
+const COLLAPSED_KEY = 'dh.tomcat.collapsed';
+const collapsed: Set<string> = (() => {
+  try {
+    const v = JSON.parse(localStorage.getItem(COLLAPSED_KEY) ?? '[]');
+    return new Set(Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : []);
+  } catch {
+    return new Set<string>();
+  }
+})();
+
+function setCollapsed(id: string, fold: boolean): void {
+  if (fold) collapsed.add(id);
+  else collapsed.delete(id);
+  try {
+    localStorage.setItem(COLLAPSED_KEY, JSON.stringify([...collapsed]));
+  } catch {
+    /* private mode: not remembered */
+  }
+}
+
+function chevron(): SVGElement {
+  const ns = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(ns, 'svg');
+  svg.setAttribute('viewBox', '0 0 16 16');
+  svg.setAttribute('width', '14');
+  svg.setAttribute('height', '14');
+  svg.setAttribute('aria-hidden', 'true');
+  svg.setAttribute('class', 'card-chev');
+  const p = document.createElementNS(ns, 'path');
+  p.setAttribute('d', 'M4 6l4 4 4-4');
+  p.setAttribute('fill', 'none');
+  p.setAttribute('stroke', 'currentColor');
+  p.setAttribute('stroke-width', '1.8');
+  p.setAttribute('stroke-linecap', 'round');
+  p.setAttribute('stroke-linejoin', 'round');
+  svg.append(p);
+  return svg;
+}
+
+/**
+ * A section of the page. Its title folds it away and back (remembered); `count`, when given,
+ * shows beside the title so a folded section still says what is in it.
+ */
 function card(id: string, title: string, desc: Child, tools: Child, ...body: Child[]): HTMLElement {
-  return h(
-    'section',
-    { class: 'card', id: `tm-${id}` },
-    h('header', { class: 'card-head' }, h('div', {}, h('h2', {}, title), desc ? h('p', {}, desc) : null), h('div', { class: 'card-tools' }, tools)),
-    h('div', { class: 'card-body' }, ...body),
+  return foldCard(id, title, null, desc, tools, ...body);
+}
+
+function foldCard(id: string, title: string, count: number | null, desc: Child, tools: Child, ...body: Child[]): HTMLElement {
+  const folded = collapsed.has(id);
+  const bodyEl = h('div', { class: 'card-body', id: `tm-${id}-body` }, ...body);
+  bodyEl.hidden = folded;
+  const toggle = h(
+    'button',
+    { type: 'button', class: 'card-toggle', 'aria-expanded': String(!folded), 'aria-controls': `tm-${id}-body`, title: folded ? `Show ${title}` : `Hide ${title}` },
+    chevron(),
+    h('h2', {}, title),
+    count != null ? h('span', { class: 'card-count' }, count.toLocaleString()) : null,
   );
+  const section = h(
+    'section',
+    { class: `card card-fold${folded ? ' folded' : ''}`, id: `tm-${id}` },
+    h('header', { class: 'card-head' }, h('div', {}, toggle, desc && !folded ? h('p', {}, desc) : null), h('div', { class: 'card-tools' }, tools)),
+    bodyEl,
+  );
+  toggle.addEventListener('click', () => {
+    setCollapsed(id, !collapsed.has(id));
+    if (T.open) render();
+    // The re-render replaced the button: keep the focus on the new one.
+    document.querySelector<HTMLElement>(`#tm-${CSS.escape(id)} .card-toggle`)?.focus({ preventScroll: true });
+  });
+  return section;
 }
 
 const dirLabel = (dir: string) => (dir ? h('span', { class: 'tm-dir' }, dir) : null);
@@ -494,7 +559,7 @@ function webappsCard(s: TomcatState): HTMLElement {
     body.push(h('div', { class: 'tm-note' }, 'Without the Tomcat Manager, Disable and Enable are how a webapp is stopped and started. Set up the Manager in ', settingsLink(), ' to start, stop and reload webapps in place.'));
   }
   const tools = s.settings.webappsDir && !s.problems.some((p) => p.key === 'webappsDir') ? revealButton({ from: 'webapps' }, s.settings.webappsDir) : null;
-  return card('webapps', 'Webapps', dirLabel(s.settings.webappsDir), tools, ...body);
+  return foldCard('webapps', 'Webapps', s.settings.webappsDir ? s.webapps.length : null, dirLabel(s.settings.webappsDir), tools, ...body);
 }
 
 function disabledCard(s: TomcatState): HTMLElement {
@@ -507,7 +572,7 @@ function disabledCard(s: TomcatState): HTMLElement {
   body.push(...s.disabled.map((a) => webappRow(s, a)));
   // The folder is created by the first Disable, so there is something to open once something is in it.
   const tools = s.disabled.length ? revealButton({ from: 'disabled' }, s.settings.disabledDir) : null;
-  return card('disabled', 'Disabled webapps', dirLabel(s.settings.disabledDir), tools, ...body);
+  return foldCard('disabled', 'Disabled webapps', s.settings.disabledDir ? s.disabled.length : null, dirLabel(s.settings.disabledDir), tools, ...body);
 }
 
 function warsCard(s: TomcatState): HTMLElement {
@@ -537,7 +602,7 @@ function warsCard(s: TomcatState): HTMLElement {
       ),
     );
   }
-  return card('wars', 'WAR builds', s.settings.warWatch.length ? dirLabel(s.settings.warWatch.join(' · ')) : 'From the watch folders in Settings.', null, ...body);
+  return foldCard('wars', 'WAR builds', s.settings.warWatch.length ? s.wars.length : null, s.settings.warWatch.length ? dirLabel(s.settings.warWatch.join(' · ')) : 'From the watch folders in Settings.', null, ...body);
 }
 
 function render(): void {

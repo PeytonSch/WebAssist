@@ -1097,6 +1097,41 @@ body.settings-open #main { display: none; }
 .card-body { padding: 4px 20px; transition: opacity 0.15s; }
 .card-body.disabled { opacity: 0.55; }
 
+/* Sections that fold (the Tomcat page). */
+.card-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin: -3px 0 -3px -6px;
+  padding: 3px 8px 3px 6px;
+  border: 0;
+  border-radius: 7px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.card-toggle:hover { background: var(--hover); }
+.card-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.card-chev { flex: none; color: var(--muted); transition: transform 0.15s ease; }
+.card-fold.folded .card-chev { transform: rotate(-90deg); }
+.card-fold.folded .card-head { border-bottom: 0; padding-bottom: 14px; padding-top: 14px; }
+.card-fold .card-head p { margin-left: 22px; }
+.card-count {
+  min-width: 20px;
+  padding: 0 7px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--text-2);
+  font-size: 11.5px;
+  font-weight: 600;
+  line-height: 18px;
+  text-align: center;
+}
+@media (prefers-reduced-motion: reduce) { .card-chev { transition: none; } }
+
 .field {
   display: grid;
   grid-template-columns: minmax(180px, 2fr) 3fr;
