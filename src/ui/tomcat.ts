@@ -955,6 +955,8 @@ async function openDeploy(war: WarInfo): Promise<void> {
   const ok = h('button', { type: 'submit', class: 'btn btn-primary' }, 'Deploy') as HTMLButtonElement;
   const cancel = h('button', { type: 'button', class: 'btn' }, 'Cancel');
 
+  /** Deployed as a folder only: Tomcat would serve it in place of the new WAR unless it is moved aside. */
+  const folderOnly = (name: string) => !!state?.webapps.find((a) => a.name === name && !a.external && a.hasDir && !a.hasWar);
   const update = () => {
     error.textContent = '';
     const name = input.value.trim();
@@ -969,15 +971,29 @@ async function openDeploy(war: WarInfo): Promise<void> {
       parts.push(h('p', { class: 'warn' }, 'Set the webapps folder in ', settingsLink(), ' first.'));
     } else {
       parts.push(h('p', {}, `Copies it to webapps as `, h('code', {}, `${name}.war`), ` → ${contextPath(name)}`));
-      if (deployed?.hasDir && !deployed.hasWar) {
-        blocked = true;
-        parts.push(h('p', { class: 'warn' }, `${name} is deployed as a folder without a WAR, and Tomcat would keep serving the folder. Disable ${name} first, then deploy.`));
+      if (folderOnly(name)) {
+        // Tomcat would go on serving the folder: it is moved aside first, as Disable would.
+        if (!state?.settings.disabledDir) {
+          blocked = true;
+          parts.push(h('p', { class: 'warn' }, `${name} is deployed as a folder without a WAR, which Tomcat would keep serving. Choose a folder for disabled webapps in `, settingsLink(), ' so it can be moved there first.'));
+        } else {
+          parts.push(
+            h(
+              'p',
+              { class: 'tm-deploy-move' },
+              `${name} is deployed as a folder without a WAR. Deploying first moves that folder to the disabled folder`,
+              disabled ? ', replacing the older disabled copy there' : '',
+              deployed?.state === 'running' ? ' (stopping it first)' : '',
+              ', then deploys this WAR.',
+            ),
+          );
+        }
       } else if (deployed) {
         parts.push(h('p', {}, `Replaces the deployed ${name}.war. Tomcat redeploys it within a few seconds (with autoDeploy on, its default).`));
       } else if (!disabled) {
         parts.push(h('p', {}, 'A new webapp. Tomcat deploys it within a few seconds.'));
       }
-      if (disabled) {
+      if (disabled && !folderOnly(name)) {
         parts.push(
           h('p', { class: 'warn' }, `${name} is disabled. Deploying puts it back in webapps with this build.`),
           h('label', { class: 'check tm-check' }, removeOld, ` Delete the old disabled copy`),
@@ -1036,7 +1052,7 @@ async function openDeploy(war: WarInfo): Promise<void> {
       }
       const tooLarge = keep.tooLarge();
       if (tooLarge) throw new Error(tooLarge);
-      const body = { file: war.file, name, disabledCopy: removeOld.checked ? 'remove' : 'keep', ...keep.choices() };
+      const body = { file: war.file, name, disabledCopy: removeOld.checked ? 'remove' : 'keep', ...(folderOnly(name) ? { folder: 'disable' } : {}), ...keep.choices() };
       const { message } = await api('/api/tomcat/deploy', body);
       T.banner = { kind: 'info', text: message };
       dropNotice(war.file);

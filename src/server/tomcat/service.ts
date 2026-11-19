@@ -996,19 +996,47 @@ export class TomcatService {
    * content was merged from both (see merge.ts). Both are written into the WAR before Tomcat
    * sees it. A path in both is merged.
    */
-  async deploy(file: string, name: string, disabledCopy: 'remove' | 'keep' = 'remove', keep: string[] = [], merged: MergedInput[] = []): Promise<string> {
+  /**
+   * Deploys a watched (or downloaded) WAR as `name`. A webapp of that name deployed as a folder
+   * without a WAR would keep being served by Tomcat in place of the new WAR; with `folder:
+   * 'disable'` that folder is first moved to the disabled folder (stopped first through the
+   * Manager, and replacing a disabled copy already there), otherwise the deploy is refused.
+   */
+  async deploy(
+    file: string,
+    name: string,
+    disabledCopy: 'remove' | 'keep' = 'remove',
+    keep: string[] = [],
+    merged: MergedInput[] = [],
+    opts: { folder?: 'disable' } = {},
+  ): Promise<string> {
     if (!this.watcher.get(file)) throw new TomcatError('That WAR is not in a watched folder (or is gone).', 404);
     const { webappsDir, disabledDir } = this.needFolders(false);
     const problem = checkName(name);
     if (problem) throw new TomcatError(problem);
+    const there = (await listApps(webappsDir)).find((a) => a.name === name);
+    const folderOnly = !!there?.hasDir && !there.hasWar;
+    if (folderOnly && opts.folder !== 'disable') {
+      throw new TomcatError(`${name} is deployed as a folder without a WAR, and Tomcat would keep serving the folder. Disable ${name} first, then deploy.`, 409);
+    }
+    if (folderOnly) this.needFolders(true);
     const mergedPaths = new Set(merged.map((m) => m.path));
     keep = keep.filter((p) => !mergedPaths.has(p));
+    // Read before the folder is moved away: it is what the files are kept from.
     const kept = keep.length || merged.length ? await this.filesToKeep(name, webappsDir, keep, merged, file) : [];
+    let moveNote = '';
+    if (folderOnly) {
+      // An older disabled copy would block the move: the folder being replaced is the newer one.
+      const replacedDisabled = await removeApp(name, disabledDir);
+      const done = await this.webappAction(name, 'disable');
+      moveNote = ` First moved the ${name} folder to the disabled folder${replacedDisabled ? ', replacing the older copy there' : ''}${/stopped it first/.test(done) ? ' (stopped it first)' : ''}.`;
+    }
     let rewrite = null as RewriteResult | null;
     const write = kept.length ? async (tmp: string) => void (rewrite = await writeWarWithKept(file, tmp, kept)) : undefined;
     const { replaced } = await deployWar(file, webappsDir, name, write);
     let removed = false;
-    if (disabledDir && disabledCopy === 'remove' && !this.disabledProblem()) {
+    // The folder just moved there stays, as the copy that was replaced.
+    if (disabledDir && disabledCopy === 'remove' && !folderOnly && !this.disabledProblem()) {
       removed = await removeApp(name, disabledDir);
     }
     this.watcher.settle(file);
@@ -1027,6 +1055,7 @@ export class TomcatService {
     });
     return (
       `Deployed ${basename(file)} as ${name}.war. Tomcat ${replaced ? 'redeploys' : 'deploys'} ${path} within a few seconds.` +
+      moveNote +
       keptNote +
       (removed ? ' The old disabled copy was removed.' : '')
     );

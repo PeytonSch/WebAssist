@@ -455,8 +455,10 @@ Hub. Set it up under Settings → Tomcat server; the page says what is missing.
   from the file name, matching a deployed or disabled webapp, without a Maven version
   (`shop-1.4.0-SNAPSHOT.war` deploys as `shop`), and can be changed. Deploying over a disabled
   webapp brings it back with the new build and deletes the old disabled copy, unless you untick
-  that. A webapp deployed as a folder without a WAR must be disabled before a WAR can replace
-  it. **Show in Explorer** (Finder on macOS, the folder elsewhere) opens where a WAR was built.
+  that. A webapp deployed as a folder without a WAR (which Tomcat would go on serving) is
+  moved to the disabled folder as part of the same Deploy, stopped first if it is running and
+  replacing an older disabled copy there; the dialog says so, and its local config files can
+  still be kept. **Show in Explorer** (Finder on macOS, the folder elsewhere) opens where a WAR was built.
 - **Keeping local files.** If the copy being replaced (its unpacked folder, else its WAR, else
   its disabled copy) has files named in `tomcat.preserveFiles` anywhere in it (not under
   `WEB-INF/lib` or `node_modules`), the deploy dialog lists them under **Local config files**,

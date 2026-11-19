@@ -291,6 +291,33 @@ describe('TomcatService delete and keep', () => {
     expect(readdirSync(join(dir, 'webapps')).sort()).toEqual(['shop', 'shop.war']);
     expect(readFileSync(join(dir, 'webapps', 'shop.war'), 'utf8')).toBe('old');
   });
+
+  it('moves a webapp deployed as a folder only to the disabled folder first, replacing an older copy there', async () => {
+    tree({ 'build/': '', 'webapps/shop/config.yaml': 'env: mine\n', 'webapps/shop/index.html': 'old', 'disabled/shop.war': 'older still' });
+    const { svc } = service();
+    const file = await newBuild(svc, { 'index.html': 'new', 'config.yaml': 'env: build\n' });
+
+    // Without being told to, it refuses: Tomcat would go on serving the folder.
+    await expect(svc.deploy(file, 'shop')).rejects.toMatchObject({ status: 409, message: expect.stringMatching(/folder without a WAR/) });
+    expect(readdirSync(join(dir, 'webapps'))).toEqual(['shop']);
+
+    const message = await svc.deploy(file, 'shop', 'remove', ['config.yaml'], [], { folder: 'disable' });
+    expect(message).toMatch(/First moved the shop folder to the disabled folder, replacing the older copy there\./);
+    expect(message).toMatch(/Kept config\.yaml \(replaced\)/);
+    expect(readdirSync(join(dir, 'webapps')).sort()).toEqual(['shop.war']);
+    expect(await warFiles(join(dir, 'webapps', 'shop.war'))).toEqual({ 'index.html': 'new', 'config.yaml': 'env: mine\n' });
+    // The folder that was replaced is kept as the disabled copy.
+    expect(readdirSync(join(dir, 'disabled')).sort()).toEqual(['shop']);
+    expect(readFileSync(join(dir, 'disabled', 'shop', 'index.html'), 'utf8')).toBe('old');
+  });
+
+  it('needs a disabled folder to move a folder-only webapp to', async () => {
+    tree({ 'build/': '', 'webapps/shop/index.html': 'old' });
+    const { svc } = service({ disabledDir: '' });
+    const file = await newBuild(svc, { 'index.html': 'new' });
+    await expect(svc.deploy(file, 'shop', 'remove', [], [], { folder: 'disable' })).rejects.toThrow(/folder for disabled webapps/);
+    expect(readdirSync(join(dir, 'webapps'))).toEqual(['shop']);
+  });
 });
 
 describe('Tomcat API: delete and keep', () => {
