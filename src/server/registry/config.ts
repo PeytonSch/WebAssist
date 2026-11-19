@@ -15,23 +15,31 @@ const isObj = (v: unknown): v is Record<string, any> => !!v && typeof v === 'obj
 const HEADER_NAME = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
 const COORDINATE = /^[A-Za-z0-9_.-]+$/;
 
+function regexProblem(pattern: string): string | null {
+  try {
+    versionMatcher(pattern);
+    return null;
+  } catch (err) {
+    return (err as Error).message.replace(/^Invalid regular expression: /, '');
+  }
+}
+
 /** What is wrong with one field of a package entry, or null. */
 function fieldProblem(key: keyof RegistryPackage, value: string, label: string): string | null {
   switch (key) {
-    case 'groupId':
     case 'artifactId':
+      // A pattern searches the group: * and ?, or a /regular expression/.
+      if (/[*?]/.test(value) && /^[A-Za-z0-9_.*?-]+$/.test(value)) return null;
+      if (/^\/.+\/[a-z]*$/.test(value)) return regexProblem(value);
+      return COORDINATE.test(value) ? null : `${label} can only have letters, digits and . _ -, or * and ? to match several`;
+    case 'groupId':
     case 'repository':
     case 'classifier':
       return COORDINATE.test(value) ? null : `${label} can only have letters, digits and . _ -`;
     case 'extension':
       return /^[A-Za-z0-9]+$/.test(value) ? null : 'An extension without the dot, e.g. war';
     case 'versionPattern':
-      try {
-        versionMatcher(value);
-        return null;
-      } catch (err) {
-        return (err as Error).message.replace(/^Invalid regular expression: /, '');
-      }
+      return regexProblem(value);
     case 'deployAs':
       return checkName(value);
     case 'params':

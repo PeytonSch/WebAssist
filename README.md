@@ -513,10 +513,23 @@ below the WAR builds. Three kinds of registry cover most setups:
 
 | Kind | `type` | Use it for | How it finds versions |
 |---|---|---|---|
-| Maven repository | `maven` | Nexus 2 and 3, Artifactory, GitLab and GitHub package registries, a plain web folder: anything Maven itself can read. Give the repository's root URL and each package's group and artifact ID. | `maven-metadata.xml` next to the artifact; for a `-SNAPSHOT`, the metadata in its folder names the latest timestamped build. |
+| Maven repository | `maven` | Nexus 2 and 3, Artifactory, GitLab and GitHub package registries, a plain web folder: anything Maven itself can read. Give the repository's root URL and each package's group and artifact ID, or only a group ID to find every WAR in the group. | `maven-metadata.xml` next to the artifact; for a `-SNAPSHOT`, the metadata in its folder names the latest timestamped build. A group is read from the repository's folder listing (see below). |
 | Nexus 3 search | `nexus3` | Finding every WAR in a Nexus Repository 3 repository without listing each one, and raw (non-Maven) repositories. Give the server's URL and a repository name. | `GET /service/rest/v1/search/assets`, all pages. For a large Maven repository, add `maven.extension=war` to the search's extra parameters so Nexus leaves out poms and jars. |
 | Direct URL | `url` | One fixed address per WAR, e.g. a CI server's "last successful build" artifact. | A `HEAD` request (a `GET` for the first byte where `HEAD` is refused): a change in ETag, Last-Modified or size is a new build. |
 
+- **Every WAR of a group.** Leave a Maven package's Artifact ID empty and Debug Hub finds the
+  artifacts of the group by itself: it reads the group's folder listing, looks for a
+  `maven-metadata.xml` in each folder, and keeps the artifacts whose newest version has a
+  `.war` (or the extension and classifier the entry asks for), so libraries and the groups
+  below are left out. Each is listed as a package of its own, and a new artifact turns up at
+  the next check. `*` and `?` pick some of them (`shop-*`), as does a `/regular expression/`.
+  This works where the repository lists its folders: Nexus 2, Nexus 3 (through its browse
+  pages when the repository path itself does not list), Artifactory and a plain web folder.
+  GitLab and GitHub package registries do not, so name each artifact there, or use a
+  **Nexus 3 search**, which finds every WAR of a group too. Whether an artifact has a WAR is
+  asked once per new version, so later checks cost one metadata request per artifact. A
+  package named in its own entry keeps that entry's settings, even when a group search
+  finds it too.
 - **Login and transport.** Per registry: no login, a user name and password (Basic), a token
   (Bearer), and any extra headers (`X-JFrog-Art-Api`, `PRIVATE-TOKEN`, …). For a registry whose
   https certificate is signed by your company's own certificate authority, give that
@@ -551,7 +564,11 @@ below the WAR builds. Three kinds of registry cover most setups:
   `.sha1` or `.md5` file of a Maven repository, the checksum in a Nexus 3 search result) and
   must be a zip archive; a download that fails either check is deleted, not deployed. The
   ordinary deploy dialog then opens on the downloaded file, so the webapp name, a disabled
-  copy and the files to keep work as for a local WAR. The name is `deployAs` if set, else the
+  copy and the files to keep work as for a local WAR.
+- **Deploy as.** Each package shows the webapp name it deploys as (`→ shop`); click it to
+  change it for that package, which is useful where one entry finds a whole group. The name
+  is remembered in `registry-state.json`, as is a different name typed into the deploy
+  dialog, and **Use default** forgets it. Without one, it is the entry's `deployAs`, else the
   package's name matched against the webapps there are. The Packages list shows what was last
   deployed from each package. Per package the three newest downloads and the deployed one are
   kept; older ones are deleted.
@@ -679,7 +696,8 @@ A registry of each kind:
     "checkMinutes": 15,
     "packages": [
       { "groupId": "com.example", "artifactId": "shop", "versions": "releases", "deployAs": "shop" },
-      { "groupId": "com.example", "artifactId": "admin", "classifier": "prod", "versionPattern": "2.*" }
+      { "groupId": "com.example", "artifactId": "admin", "classifier": "prod", "versionPattern": "2.*" },
+      { "groupId": "com.example.services", "versions": "releases" }
     ]
   },
   {
@@ -710,7 +728,7 @@ A registry of each kind:
 | `insecureTls` | `false` | Accept any https certificate from this registry. |
 | `timeoutMs` | `30000` | How long to wait for an answer, and for a download to move on. |
 | `checkMinutes` | `15` | How often to look for new versions; `0`: only with Check now. |
-| `packages` | `[]` | `maven`: `groupId`, `artifactId`. `nexus3`: `repository`, optional `group`, `name`, `params`. `url`: `name`, `url`. All: `deployAs`. `maven` and `nexus3` also: `classifier`, `extension` (`war`), `versions` (`all`, `releases`, `snapshots`), `versionPattern`. |
+| `packages` | `[]` | `maven`: `groupId`, optional `artifactId` (empty: every WAR of the group; `*` and `?` for some). `nexus3`: `repository`, optional `group`, `name`, `params`. `url`: `name`, `url`. All: `deployAs`. `maven` and `nexus3` also: `classifier`, `extension` (`war`), `versions` (`all`, `releases`, `snapshots`), `versionPattern`. |
 
 ## Sessions and privacy
 

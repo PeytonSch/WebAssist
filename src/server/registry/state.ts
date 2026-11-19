@@ -38,6 +38,11 @@ export interface PackageState {
   deployed: (BuildRef & { as: string; at: string }) | null;
   downloads: CachedDownload[];
   /**
+   * The webapp name to deploy it as, set on the Tomcat page or by deploying it under another name
+   * than it would have been. Wins over the settings' Deploy as and the guess.
+   */
+  deployAs?: string;
+  /**
    * Which versions the settings let through when `seen` was set. When that changes, what is latest
    * changes with it, and is not news.
    */
@@ -79,6 +84,7 @@ function clean(v: unknown): PackageState | null {
     deployed: deployed && typeof v.deployed.as === 'string' ? { ...deployed, as: v.deployed.as, at: typeof v.deployed.at === 'string' ? v.deployed.at : new Date(0).toISOString() } : null,
     downloads,
     ...(typeof v.filter === 'string' ? { filter: v.filter } : {}),
+    ...(typeof v.deployAs === 'string' && v.deployAs ? { deployAs: v.deployAs } : {}),
     touchedAt: typeof v.touchedAt === 'string' ? v.touchedAt : new Date().toISOString(),
   };
 }

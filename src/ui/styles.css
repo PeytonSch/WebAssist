@@ -2629,6 +2629,22 @@ body.metrics-open #main { display: none; }
 .pkg-coords { font: 11.5px var(--mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 select.input.pkg-version { width: 100%; height: 28px; padding: 0 24px 0 8px; font: 12px var(--mono); }
 .pkg-status { display: flex; flex-direction: column; gap: 1px; font-size: 12px; }
+/* The name a package deploys as: a quiet button that opens an editor in its place. */
+.pkg-target { align-self: flex-start; display: inline-flex; align-items: baseline; max-width: 100%; padding: 1px 5px; margin: -1px -5px; border: 1px solid transparent; border-radius: 5px; background: none; color: var(--text-2); font: inherit; cursor: pointer; text-align: left; }
+.pkg-target:hover, .pkg-target:focus-visible { border-color: var(--border); background: var(--surface-2, var(--bg)); color: var(--text); }
+.pkg-target-name { font-family: var(--mono); font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.pkg-target.own .pkg-target-name { color: var(--accent); font-weight: 600; }
+.pkg-target-arrow { margin-right: 4px; }
+.pkg-target-edit { margin-left: 6px; font-size: 11px; opacity: 0.3; transition: opacity 0.12s; }
+.pkg-target:hover .pkg-target-edit, .pkg-target:focus-visible .pkg-target-edit { opacity: 0.9; }
+.pkg-as { grid-column: span 2; display: flex; flex-direction: column; gap: 3px; min-width: 0; font-size: 12px; }
+.pkg-as-row { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.pkg-as-row > .muted { white-space: nowrap; }
+.pkg-as-row .input { flex: 1; min-width: 60px; height: 26px; padding: 0 7px; font-size: 12px; }
+.pkg-as-row .input.invalid { border-color: var(--error); }
+.pkg-as-row .btn { height: 26px; padding: 0 9px; font-size: 12px; }
+.pkg-as-hint, .pkg-as-error { font-size: 11.5px; }
+.pkg-as-reset { font-size: 11.5px; }
 .pkg-progress { display: flex; flex-direction: column; gap: 5px; font-size: 12px; color: var(--text-2); font-variant-numeric: tabular-nums; }
 .pkg-bar { height: 4px; border-radius: 2px; background: var(--border); overflow: hidden; }
 .pkg-bar i { display: block; height: 100%; width: 0; border-radius: 2px; background: var(--accent); transition: width 0.15s linear; }
@@ -2669,6 +2685,8 @@ select.input.pkg-version { width: 100%; height: 28px; padding: 0 24px 0 8px; fon
 .reg-test .pm b { font-weight: 600; }
 @media (max-width: 960px) {
   .tm-row.tm-pkg { grid-template-columns: minmax(0, 1fr) 190px auto; }
+  /* The status (what it deploys as, a download's progress, the name editor) on a line of its own. */
+  .tm-row.tm-pkg > :nth-child(4) { display: flex; grid-column: 1 / -1; order: 1; }
 }
 @media (max-width: 760px) {
   .reg-head { grid-template-columns: 30px minmax(0, 1fr) auto; }

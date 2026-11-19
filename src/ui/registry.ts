@@ -2,7 +2,7 @@ import type { DownloadInfo, DownloadResult, PackageInfo, PackageNotice, Registry
 import { REGISTRY_FORMS } from '../shared/registry-forms';
 import { fmtBytes, h, type Child } from './dom';
 import { openSettings } from './settings';
-import { ago, api, button, card, missing, openDeploy, renderNotices, tomcatOpen } from './tomcat';
+import { ago, api, button, card, missing, nameProblem, openDeploy, renderNotices, tomcatOpen } from './tomcat';
 
 /**
  * Packages from the registries in Settings, on the Tomcat page: each package with its versions
@@ -22,6 +22,8 @@ const P = {
   loadError: null as string | null,
   /** The version chosen in each package's list, by package key. Not there: the latest. */
   picked: new Map<string, string>(),
+  /** The package whose Deploy as is being edited, and what is typed so far. */
+  editing: null as { key: string; value: string; error: string | null } | null,
   /** Requests in flight: package keys, and "check". */
   busy: new Set<string>(),
   /** Downloads the user canceled, so their failure is not reported as one. */
@@ -129,6 +131,27 @@ async function downloadAndDeploy(key: string, version: string | undefined): Prom
   }
 }
 
+async function saveTarget(key: string, value: string): Promise<void> {
+  const name = value.trim();
+  const problem = name ? nameProblem(name) : null;
+  if (problem) {
+    P.editing = { key, value, error: problem };
+    return redrawCard();
+  }
+  P.busy.add(`${key}:as`);
+  redrawCard();
+  try {
+    const state = await api<RegistryState>('/api/registry/target', { key, deployAs: name });
+    P.editing = null;
+    adopt(state);
+  } catch (err) {
+    P.editing = { key, value, error: (err as Error).message };
+  } finally {
+    P.busy.delete(`${key}:as`);
+    redrawCard();
+  }
+}
+
 function cancelDownload(key: string): void {
   P.canceled.add(key);
   void api('/api/registry/cancel', { key }).catch(() => undefined);
@@ -189,6 +212,89 @@ function paintProgress(el: HTMLElement, d: DownloadInfo | undefined): void {
   fill.style.width = known ? `${Math.min(100, (d!.received / d!.total!) * 100).toFixed(1)}%` : '';
 }
 
+const TARGET_FROM: Record<PackageInfo['targetFrom'], string> = {
+  package: 'set for this package',
+  settings: 'from Settings › Package registries',
+  guess: 'guessed from the name',
+};
+
+/** "→ shop", which opens the editor for the name it deploys as. */
+function targetButton(p: PackageInfo): HTMLElement {
+  const b = h(
+    'button',
+    { type: 'button', class: `pkg-target${p.targetFrom === 'package' ? ' own' : ''}`, 'data-f': `${p.key}:as`, title: `Deploys as ${p.target}.war (${TARGET_FROM[p.targetFrom]}). Click to change.` },
+    h('span', { class: 'pkg-target-arrow' }, '→'),
+    h('span', { class: 'pkg-target-name' }, p.target),
+    h('span', { class: 'pkg-target-edit', 'aria-hidden': 'true' }, '✎'),
+  );
+  b.setAttribute('aria-label', `Deploys as ${p.target}. Change`);
+  b.addEventListener('click', () => {
+    P.editing = { key: p.key, value: p.target, error: null };
+    redrawCard();
+    const input = P.card?.querySelector<HTMLInputElement>('.pkg-as-input');
+    input?.focus();
+    input?.select();
+  });
+  return b;
+}
+
+/** Editing the webapp name a package deploys as, in place of its status. */
+function targetEditor(p: PackageInfo): HTMLElement {
+  const e = P.editing!;
+  const saving = P.busy.has(`${p.key}:as`);
+  const input = h('input', {
+    type: 'text',
+    class: `input mono pkg-as-input${e.error ? ' invalid' : ''}`,
+    spellcheck: 'false',
+    autocomplete: 'off',
+    'aria-label': `Deploy ${p.name} as`,
+    placeholder: 'guessed from the name',
+    'data-f': `${p.key}:as-input`,
+  }) as HTMLInputElement;
+  input.value = e.value;
+  input.disabled = saving;
+  const close = () => {
+    P.editing = null;
+    redrawCard();
+    [...(P.card?.querySelectorAll<HTMLElement>('[data-f]') ?? [])].find((el) => el.dataset.f === `${p.key}:as`)?.focus();
+  };
+  input.addEventListener('input', () => {
+    e.value = input.value;
+    const was = e.error;
+    e.error = null;
+    if (was) {
+      input.classList.remove('invalid');
+      input.closest('.pkg-as')?.querySelector('.pkg-as-error')?.replaceWith(hint);
+    }
+  });
+  input.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Enter') {
+      ev.preventDefault();
+      void saveTarget(p.key, input.value);
+    } else if (ev.key === 'Escape') {
+      ev.preventDefault();
+      ev.stopPropagation();
+      close();
+    }
+  });
+  const save = button(saving ? 'Saving…' : 'Save', () => void saveTarget(p.key, input.value), { primary: true, disabled: saving });
+  save.dataset.f = `${p.key}:as-save`;
+  const cancel = button('Cancel', close, { disabled: saving });
+  cancel.classList.add('btn-ghost');
+  const reset =
+    p.targetFrom === 'package'
+      ? h('button', { type: 'button', class: 'link pkg-as-reset', title: 'Forget this name: deploy as Settings say, or as guessed from the name' }, 'Use default')
+      : null;
+  reset?.addEventListener('click', () => void saveTarget(p.key, ''));
+  const hint = h('div', { class: 'muted pkg-as-hint' }, 'Remembered for this package. ', reset);
+  return h(
+    'div',
+    { class: 'pkg-as' },
+    h('div', { class: 'pkg-as-row' }, h('span', { class: 'muted' }, 'Deploy as'), input, save, cancel),
+    e.error ? h('div', { class: 'field-error pkg-as-error', role: 'alert' }, e.error) : hint,
+  );
+}
+
 function packageRow(p: PackageInfo, canDeploy: boolean): HTMLElement {
   const downloading = P.busy.has(p.key) || P.downloads.has(p.key);
   const picked = p.versions.find((v) => v.version === P.picked.get(p.key)) ?? p.versions[0];
@@ -208,17 +314,27 @@ function packageRow(p: PackageInfo, canDeploy: boolean): HTMLElement {
     redrawCard();
   });
 
+  const editing = !downloading && P.editing?.key === p.key;
   let status: Child;
   if (downloading) status = progress(p.key);
+  else if (editing) status = targetEditor(p);
   else {
     const about = picked ? [picked.modified ? `published ${ago(picked.modified)}` : '', fmtBytes(picked.bytes)].filter(Boolean).join(' · ') : '';
     status = h(
       'div',
       { class: 'pkg-status muted' },
-      p.deployed
-        ? h('span', { title: `Deployed from here ${new Date(p.deployed.at).toLocaleString()}` }, `${p.deployed.version} deployed as ${p.deployed.as}`)
-        : h('span', { title: `Deploys as ${p.target}.war` }, `→ ${p.target}`),
-      about ? h('span', {}, about) : null,
+      targetButton(p),
+      p.deployed || about
+        ? h(
+            'span',
+            {},
+            p.deployed
+              ? h('span', { title: `Deployed from here ${new Date(p.deployed.at).toLocaleString()}` }, `${p.deployed.version} deployed${p.deployed.as === p.target ? '' : ` as ${p.deployed.as}`}`)
+              : null,
+            p.deployed && about ? ' · ' : null,
+            about || null,
+          )
+        : null,
     );
   }
 
@@ -250,7 +366,7 @@ function packageRow(p: PackageInfo, canDeploy: boolean): HTMLElement {
 
   return h(
     'div',
-    { class: `tm-row tm-pkg${p.fresh ? ' fresh' : ''}` },
+    { class: `tm-row tm-pkg${p.fresh ? ' fresh' : ''}${editing ? ' editing' : ''}` },
     h(
       'div',
       { class: 'tm-name', title: p.coordinates },
@@ -261,7 +377,8 @@ function packageRow(p: PackageInfo, canDeploy: boolean): HTMLElement {
     h('span', { class: 'muted pkg-coords', title: p.coordinates }, p.coordinates),
     p.versions.length ? select : h('span', { class: 'muted' }, 'No versions'),
     status,
-    h('div', { class: 'tm-actions' }, ...actions),
+    // The editor takes the actions' room too.
+    editing ? null : h('div', { class: 'tm-actions' }, ...actions),
   );
 }
 
@@ -329,7 +446,9 @@ function redrawCard(): void {
   const next = build(old.dataset.canDeploy === 'true');
   old.replaceWith(next);
   P.card = next;
-  if (f) [...next.querySelectorAll<HTMLElement>('[data-f]')].find((el) => el.dataset.f === f)?.focus({ preventScroll: true });
+  const again = f ? [...next.querySelectorAll<HTMLElement>('[data-f]')].find((el) => el.dataset.f === f) : null;
+  again?.focus({ preventScroll: true });
+  if (again instanceof HTMLInputElement) again.setSelectionRange(again.value.length, again.value.length);
 }
 
 function redrawAll(): void {

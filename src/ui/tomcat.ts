@@ -83,7 +83,7 @@ function settingsLink(text = 'Settings › Tomcat'): HTMLElement {
 }
 
 /** Mirrors checkName in src/server/tomcat/webapps.ts, for feedback while typing. The hub checks again. */
-function nameProblem(name: string): string | null {
+export function nameProblem(name: string): string | null {
   if (!name) return 'Enter a name.';
   if (/[\\/]/.test(name) || name.includes('..')) return 'The name cannot contain /, \\ or ..';
   if (!/^[\p{L}\p{N}_][\p{L}\p{N}._#~+@()\- ]*$/u.test(name) || /[. ]$/.test(name)) {

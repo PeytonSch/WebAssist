@@ -9,7 +9,7 @@ import { DEFAULT_CONFIG, validateConfig, type Config, type FieldError } from '..
 import { startServer } from '../src/server/http';
 import { Hub } from '../src/server/hub';
 import { validateRegistries } from '../src/server/registry/config';
-import { mavenKind, parseArtifactMetadata, parseChecksum, parseSnapshotMetadata } from '../src/server/registry/maven';
+import { forgetPublished, isArtifactPattern, listingFolders, mavenKind, nexus3BrowseUrl, parseArtifactMetadata, parseChecksum, parseSnapshotMetadata } from '../src/server/registry/maven';
 import { nexus3Kind, splitFileName } from '../src/server/registry/nexus3';
 import { RegistryProblem, RegistryService, safeFileName } from '../src/server/registry/service';
 import { RegistryStateStore, STATE_FILE } from '../src/server/registry/state';
@@ -334,6 +334,124 @@ describe('Maven repository', () => {
     expect(err.kind).toBe('not-found');
     expect(err.message).toContain(`Not found (404): ${fake.url}${SHOP}/maven-metadata.xml`);
     expect(err.hint).toMatch(/group ID and artifact ID.*repository’s root/);
+  });
+});
+
+// ── Finding the artifacts of a group ───────────────────
+
+const GROUP = `${REPO}/com/example`;
+const folderPage = (names: string[]) =>
+  `<html><body><h1>Index of /com/example</h1><a href="../">Parent Directory</a> <a href="?C=N;O=D">Name</a>\n${names.map((n) => `<a href="${n}/">${n}/</a>`).join('\n')}\n<a href="maven-metadata.xml">maven-metadata.xml</a></body></html>`;
+
+/** A group with two WARs (shop, admin), a JAR library, a group below it and a stray folder. */
+function groupStore(): Map<string, string | Buffer> {
+  const store = mavenStore();
+  const add = (artifact: string, version: string, file: string) => {
+    const meta = parseArtifactMetadata(String(store.get(`${GROUP}/${artifact}/maven-metadata.xml`) ?? artifactMeta([]).replace('<latest></latest>', ''))).versions;
+    store.set(`${GROUP}/${artifact}/maven-metadata.xml`, artifactMeta([...meta, version]).replace(/<artifactId>shop</, `<artifactId>${artifact}<`));
+    store.set(`${GROUP}/${artifact}/${version}/${file}`, war(version));
+  };
+  add('admin', '1.0.0', 'admin-1.0.0.war');
+  add('admin', '1.1.0-SNAPSHOT', 'admin-1.1.0-20261114.101502-3.war');
+  store.set(`${GROUP}/admin/1.1.0-SNAPSHOT/maven-metadata.xml`, snapshotMeta('1.1.0-SNAPSHOT', '20261114.101502', 3));
+  add('core-lib', '3.2.1', 'core-lib-3.2.1.jar');
+  store.set(`${GROUP}/`, folderPage(['admin', 'core-lib', 'shop', 'tools', 'notes']));
+  store.set(`${GROUP}/tools/`, folderPage(['cli']));
+  return store;
+}
+
+describe('Maven repository: every WAR of a group', () => {
+  beforeEach(() => forgetPublished());
+
+  it('reads the folders a directory listing links to, whatever the server', () => {
+    const at = 'https://nexus.example.com/nexus/content/repositories/releases/com/example/';
+    // Nexus 2: absolute links. Apache and Artifactory: relative ones. Parent and sort links are not folders.
+    const nexus2 = `<a href="${at}shop/">shop/</a><a href="${at}admin/">admin/</a><a href="${at.replace(/example\/$/, '')}">Parent</a>`;
+    expect(listingFolders(nexus2, at)).toEqual(['shop', 'admin']);
+    expect(listingFolders(folderPage(['a', 'b-c']), at.slice(0, -1))).toEqual(['a', 'b-c']);
+    expect(listingFolders(`<a href='x/'>x</a><A HREF=y/>y</A><a href="z/deeper/">z</a><a href="https://elsewhere.example/q/">q</a><a href="file.war">f</a>`, at)).toEqual(['x', 'y']);
+    expect(listingFolders('<a href="/nexus/content/repositories/releases/com/example/s%20p/">bad</a>', at)).toEqual([]);
+  });
+
+  it('knows when an artifact ID asks for a search', () => {
+    expect(['', ' ', '*', 'shop-*', 'sh?p', '/^shop/'].map(isArtifactPattern)).toEqual([true, true, true, true, true, true]);
+    expect(['shop', 'shop.web', 'a/b'].map(isArtifactPattern)).toEqual([false, false, false]);
+    expect(nexus3BrowseUrl('https://n.example/repository/maven-public', ['com', 'example'])).toBe('https://n.example/service/rest/repository/browse/maven-public/com/example/');
+    expect(nexus3BrowseUrl('https://n.example/nexus/content/repositories/x', ['com'])).toBeNull();
+  });
+
+  it('finds the artifacts with a WAR, leaving out libraries, groups below and stray folders', async () => {
+    const fake = await serve(files(groupStore()));
+    const reg = registry({ url: fake.url + REPO });
+    const entry = { ...reg.packages[0], artifactId: '' };
+    expect(mavenKind.describe(entry)).toBe('com.example:*');
+    const listing = await mavenKind.list(ctxFor(reg), entry);
+    expect(listing.packages.map((p) => [p.id, p.name, p.coordinates])).toEqual([
+      ['com.example:admin', 'admin', 'com.example:admin'],
+      ['com.example:shop', 'shop', 'com.example:shop'],
+    ]);
+    expect(listing.hint).toBeUndefined();
+    // The snapshot is found by its timestamped file, which the package then downloads from.
+    const admin = listing.packages[0];
+    const artifact = await mavenKind.locate(ctxFor(reg), entry, admin, admin.versions.find((v) => v.snapshot)!);
+    expect(artifact.url).toBe(`${fake.url}${GROUP}/admin/1.1.0-SNAPSHOT/admin-1.1.0-20261114.101502-3.war`);
+
+    // What a check found out about each artifact is not asked again until it has a new version.
+    const before = fake.hits.length;
+    await mavenKind.list(ctxFor(reg), entry);
+    const again = fake.hits.slice(before).map((h) => h.path);
+    expect(again.filter((p) => /\.(war|jar)$/.test(p))).toEqual([]);
+  });
+
+  it('narrows the search with * and ?, and the same package key as naming it', async () => {
+    const fake = await serve(files(groupStore()));
+    const reg = registry({ url: fake.url + REPO });
+    const { packages } = await mavenKind.list(ctxFor(reg), { ...reg.packages[0], artifactId: 'sh*' });
+    expect(packages.map((p) => p.id)).toEqual(['com.example:shop']);
+    const none = await mavenKind.list(ctxFor(reg), { ...reg.packages[0], artifactId: 'core-*' });
+    expect(none.packages).toEqual([]);
+    expect(none.hint).toMatch(/1 folder in com\.example matching core-\*, but no artifact with a \.war/);
+    const jars = await mavenKind.list(ctxFor(reg), { ...reg.packages[0], artifactId: 'core-*', extension: 'jar' });
+    expect(jars.packages.map((p) => p.id)).toEqual(['com.example:core-lib@jar']);
+  });
+
+  it('uses Nexus 3’s browse pages where the repository path does not list folders', async () => {
+    const store = groupStore();
+    store.delete(`${GROUP}/`);
+    store.set('/service/rest/repository/browse/maven-public/com/example/', folderPage(['shop']));
+    const fake = await serve(files(store));
+    const reg = registry({ url: fake.url + REPO });
+    const { packages } = await mavenKind.list(ctxFor(reg), { ...reg.packages[0], artifactId: '' });
+    expect(packages.map((p) => p.name)).toEqual(['shop']);
+  });
+
+  it('says what to do where the repository lists nothing', async () => {
+    const store = groupStore();
+    store.delete(`${GROUP}/`);
+    const fake = await serve(files(store));
+    const reg = registry({ url: fake.url + REPO });
+    const err: RegistryError = await mavenKind.list(ctxFor(reg), { ...reg.packages[0], artifactId: '' }).catch((e) => e);
+    expect(err.message).toMatch(/does not list what is in com\.example/);
+    expect(err.hint).toMatch(/Artifact ID of each package/);
+  });
+
+  it('checks every WAR of a group, one package each, and lets a named entry keep its own', async () => {
+    const fake = await serve(files(groupStore()));
+    const { svc } = makeService([
+      registry({
+        url: fake.url + REPO,
+        packages: [
+          { groupId: 'com.example', artifactId: 'shop', classifier: '', extension: 'war', versions: 'all', versionPattern: '', deployAs: 'ROOT' },
+          { groupId: 'com.example', artifactId: '', classifier: '', extension: 'war', versions: 'all', versionPattern: '', deployAs: '' },
+        ],
+      }),
+    ]);
+    await svc.checkNow();
+    const pkgs = (await svc.snapshot()).registries[0].packages;
+    expect(pkgs.map((p) => [p.key, p.target, p.targetFrom])).toEqual([
+      ['Nexus::com.example:admin', 'admin', 'guess'],
+      ['Nexus::com.example:shop', 'ROOT', 'settings'],
+    ]);
   });
 });
 
@@ -827,7 +945,7 @@ describe('registry settings', () => {
 
   it('reports each problem against the input it belongs to', () => {
     const { errors } = check([
-      { name: 'A', type: 'maven', url: 'nexus.example.com', auth: { type: 'basic', username: '' }, timeoutMs: 5, checkMinutes: -1, packages: [{ groupId: 'com example', artifactId: '', versionPattern: '/(/', deployAs: '../x', versions: 'newest' }] },
+      { name: 'A', type: 'maven', url: 'nexus.example.com', auth: { type: 'basic', username: '' }, timeoutMs: 5, checkMinutes: -1, packages: [{ groupId: 'com example', artifactId: 'sh op', versionPattern: '/(/', deployAs: '../x', versions: 'newest' }] },
       { name: 'a', type: 'ftp', url: 'https://x.example', auth: { type: 'bearer' }, headers: [{ name: 'Bad Name', value: 'v' }], packages: [] },
       { name: 'U', type: 'url', url: '', packages: [{ name: 'shop', url: 'builds/shop.war' }, { name: '', url: 'ftp://x/shop.war' }] },
     ]);
@@ -1236,6 +1354,38 @@ describe('download and checksum', () => {
     expect((await svc.snapshot()).registries[0].packages[0].deployed).toBeNull();
   });
 
+  it('deploys each package as the name set for it, or as it was last deployed', async () => {
+    const fake = await serve(files(mavenStore()));
+    const { svc } = makeService([registry({ url: fake.url + REPO })], { names: ['shop'] });
+    await svc.checkNow();
+    const pkg = async () => (await svc.snapshot()).registries[0].packages[0];
+    expect(await pkg()).toMatchObject({ target: 'shop', targetFrom: 'guess' });
+
+    await svc.setTarget(KEY, 'ROOT');
+    expect(await pkg()).toMatchObject({ target: 'ROOT', targetFrom: 'package' });
+    expect((await svc.download(KEY)).war.target).toBe('ROOT');
+    // Remembered across a restart, in the state file.
+    const again = makeService([registry({ url: fake.url + REPO })], { names: ['shop'] }).svc;
+    await again.checkNow();
+    expect((await again.snapshot()).registries[0].packages[0].target).toBe('ROOT');
+
+    // The default is not remembered: a Deploy as in Settings later still counts.
+    await svc.setTarget(KEY, ' shop ');
+    expect(await pkg()).toMatchObject({ target: 'shop', targetFrom: 'guess' });
+    expect(svc.state.get(KEY)?.deployAs).toBeUndefined();
+    await expect(svc.setTarget(KEY, '../x')).rejects.toThrow(RegistryProblem);
+
+    // Deployed under another name in the deploy dialog: that name from then on.
+    const { war: got } = await svc.download(KEY);
+    svc.deployed(got.file, 'shop-test');
+    expect(await pkg()).toMatchObject({ target: 'shop-test', targetFrom: 'package' });
+    svc.deployed(got.file, 'shop');
+    expect(await pkg()).toMatchObject({ target: 'shop', targetFrom: 'guess' });
+    await svc.setTarget(KEY, 'other');
+    await svc.setTarget(KEY, '');
+    expect(await pkg()).toMatchObject({ target: 'shop', targetFrom: 'guess' });
+  });
+
   it('makes registry file names safe to write', () => {
     expect(safeFileName('shop-2.4.0.war')).toBe('shop-2.4.0.war');
     expect(safeFileName('../../etc/passwd')).toBe('passwd');
@@ -1278,8 +1428,8 @@ describe('Test connection', () => {
     const unset = await svc.test({ ...base, auth: { type: 'bearer', token: '${env:NOPE}' } });
     expect(unset.lines[0].message).toMatch(/environment variable NOPE/);
 
-    const unfinished = await svc.test({ ...base, url: '', packages: [{ groupId: 'com.example', artifactId: '' }] });
-    expect(unfinished.lines.map((l) => [l.entry, l.message])).toEqual([['Package 1', 'Artifact ID is required'], ['', 'URL is required']]);
+    const unfinished = await svc.test({ ...base, url: '', packages: [{ groupId: '', artifactId: 'shop' }] });
+    expect(unfinished.lines.map((l) => [l.entry, l.message])).toEqual([['Package 1', 'Group ID is required'], ['', 'URL is required']]);
     expect((await svc.test({})).lines[0].message).toBe('Fill in the registry first.');
   });
 

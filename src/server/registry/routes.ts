@@ -15,6 +15,7 @@ type ReadBody = (req: IncomingMessage) => Promise<string>;
  *   POST /api/registry/download    { key, version? } fetch into the cache; answers { war, note } when ready to deploy
  *   POST /api/registry/cancel      { key } stop that download
  *   POST /api/registry/dismiss     { key } the latest version has been seen
+ *   POST /api/registry/target      { key, deployAs } the webapp name it deploys as; empty: the settings' or the guess
  */
 export async function registryRoute(
   registry: RegistryService,
@@ -45,6 +46,11 @@ export async function registryRoute(
     if (path === '/api/registry/cancel') {
       registry.cancel(String((await body()).key ?? ''));
       return json(res, 200, { ok: true }), true;
+    }
+    if (path === '/api/registry/target') {
+      const b = await body();
+      await registry.setTarget(String(b.key ?? ''), typeof b.deployAs === 'string' ? b.deployAs : '');
+      return json(res, 200, await registry.snapshot()), true;
     }
     if (path === '/api/registry/dismiss') {
       registry.dismiss(String((await body()).key ?? ''));

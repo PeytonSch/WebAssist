@@ -20,10 +20,10 @@ import type { HubEvent, Level } from '../../shared/types';
 import type { Config, FieldError } from '../config';
 import { makeEvent } from '../normalize';
 import { looksComplete } from '../tomcat/warwatch';
-import { guessTarget } from '../tomcat/webapps';
+import { checkName, guessTarget } from '../tomcat/webapps';
 import { resolveRegistryPaths, validateRegistries } from './config';
 import { KINDS } from './kinds';
-import { CACHE_DIR, RegistryStateStore, sameBuild, STATE_FILE, type BuildRef, type CachedDownload } from './state';
+import { CACHE_DIR, RegistryStateStore, sameBuild, STATE_FILE, type BuildRef, type CachedDownload, type PackageState } from './state';
 import { buildTransport, displayUrl, downloadTo, RegistryError, scrub, type HashName, type Transport } from './transport';
 import { httpTime, type Artifact, type FoundPackage, type FoundVersion, type RegistryContext, type RegistryKind } from './types';
 import { compareVersions, sortNewestFirst, versionMatcher } from './version';
@@ -269,6 +269,8 @@ export class RegistryService {
         if (listing.hint) problems.push({ entry: label, message: listing.hint, quiet: true });
         if (!listing.packages.length) problems.push({ entry: label, message: 'Nothing found.', quiet: true });
         for (const found of listing.packages) {
+          // Two entries that find the same package (one names it, one searches its group): the first has it.
+          if (packages.has(`${r.cfg.name}::${found.id}`)) continue;
           const tracked = await this.track(r, ctx, entry, found, problems);
           packages.set(tracked.key, tracked);
           if (this.settle(r, tracked)) announce.push(tracked);
@@ -387,8 +389,40 @@ export class RegistryService {
     return this.hooks.webappNames().catch(() => ({ deployed: [], all: [] }));
   }
 
+  /** What a package deploys as unless it is told otherwise: the settings' Deploy as, or a guess. */
+  private defaultTarget(t: Tracked, names: string[]): { target: string; from: 'settings' | 'guess' } {
+    return t.entry.deployAs ? { target: t.entry.deployAs, from: 'settings' } : { target: guessTarget(`${t.found.name}.war`, names), from: 'guess' };
+  }
+
+  private targetOf(t: Tracked, names: string[]): { target: string; from: PackageInfo['targetFrom'] } {
+    const own = this.store.get(t.key)?.deployAs;
+    return own ? { target: own, from: 'package' } : this.defaultTarget(t, names);
+  }
+
   private target(t: Tracked, names: string[]): string {
-    return t.entry.deployAs || guessTarget(`${t.found.name}.war`, names);
+    return this.targetOf(t, names).target;
+  }
+
+  /** Remembers the name a package deploys as, unless it is the one it would have anyway. */
+  private keepTarget(st: PackageState, t: Tracked, name: string, names: string[]): void {
+    const d = this.defaultTarget(t, names);
+    const same = d.from === 'settings' ? name === d.target : name.toLowerCase() === d.target.toLowerCase();
+    // The default is not remembered, so a later change in Settings still counts.
+    if (same) delete st.deployAs;
+    else st.deployAs = name;
+  }
+
+  /** Sets the webapp name a package deploys as; empty goes back to the settings' or the guess. */
+  async setTarget(key: string, deployAs: string): Promise<void> {
+    const { t } = this.find(key);
+    const name = deployAs.trim();
+    const problem = name ? checkName(name) : null;
+    if (problem) throw new RegistryProblem(`${problem}.`);
+    const st = this.store.touch(key);
+    if (name) this.keepTarget(st, t, name, (await this.names()).all);
+    else delete st.deployAs;
+    this.save();
+    this.changed();
   }
 
   async snapshot(): Promise<RegistryState> {
@@ -423,7 +457,7 @@ export class RegistryService {
             versionCount: t.versions.length,
             latest: t.latest?.version ?? null,
             fresh: !!t.latest && !!st && this.isNews(r.kind, t.latest, st.seen),
-            target: this.target(t, names.all),
+            ...(({ target, from }) => ({ target, targetFrom: from }))(this.targetOf(t, names.all)),
             deployed: st?.deployed && names.deployed.includes(st.deployed.as) ? { version: st.deployed.version, as: st.deployed.as, at: st.deployed.at } : null,
             download: this.downloads.get(t.key)?.info ?? null,
           };
@@ -459,8 +493,11 @@ export class RegistryService {
     if (hit) {
       const st = this.store.touch(hit.key);
       st.deployed = { version: hit.download.version, build: hit.download.build, as: name, at: new Date().toISOString() };
-      const latest = this.runtimes.map((r) => r.packages.get(hit.key)).find(Boolean)?.latest;
+      const tracked = this.runtimes.map((r) => r.packages.get(hit.key)).find(Boolean);
+      const latest = tracked?.latest;
       if (latest && sameBuild(latest, hit.download)) st.seen = { version: latest.version, build: latest.build };
+      // Deployed under another name than it would have been: that is its name from now on.
+      if (tracked) this.keepTarget(st, tracked, name, []);
       touched = true;
     }
     if (!touched) return;

@@ -122,6 +122,11 @@ export interface PackageInfo {
   fresh: boolean;
   /** The webapp name it would be deployed as. */
   target: string;
+  /**
+   * Where that name comes from: set for this package (on the Tomcat page, or by deploying it under
+   * that name), the registry settings' Deploy as, or guessed from the package's name.
+   */
+  targetFrom: 'package' | 'settings' | 'guess';
   /** What Debug Hub last deployed from this package, if it is still in webapps. */
   deployed: { version: string; as: string; at: string } | null;
   download: DownloadInfo | null;

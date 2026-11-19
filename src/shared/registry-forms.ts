@@ -34,7 +34,13 @@ const VERSION_FIELDS: EntryField[] = [
   { key: 'versionPattern', label: 'Version pattern', placeholder: '2.* or /^2\\.\\d+\\.\\d+$/', more: true, help: 'Only versions that match: * and ? as wildcards, or a /regular expression/.' },
 ];
 
-const DEPLOY_AS: EntryField = { key: 'deployAs', label: 'Deploy as', placeholder: 'guessed from the name', more: true, help: 'The webapp name, e.g. ROOT. Empty: the name without its version, as for a local WAR.' };
+const DEPLOY_AS: EntryField = {
+  key: 'deployAs',
+  label: 'Deploy as',
+  placeholder: 'guessed from the name',
+  more: true,
+  help: 'The webapp name, e.g. ROOT. Empty: the name without its version, as for a local WAR. Where this finds several packages, set each one’s name on the Tomcat page instead.',
+};
 
 export const REGISTRY_FORMS: Record<RegistryType, RegistryForm> = {
   maven: {
@@ -45,10 +51,15 @@ export const REGISTRY_FORMS: Record<RegistryType, RegistryForm> = {
       required: true,
       help: 'The repository’s root: the folder that has com/, org/ and so on in it. A group repository that combines releases and snapshots works too.',
     },
-    entry: { noun: 'Package', plural: 'Packages', add: 'Add package', empty: 'No packages yet: add the WARs to look for.' },
+    entry: { noun: 'Package', plural: 'Packages', add: 'Add package', empty: 'No packages yet: add the WARs to look for, or just a group ID to find every WAR in it.' },
     fields: [
       { key: 'groupId', label: 'Group ID', placeholder: 'com.example', required: true },
-      { key: 'artifactId', label: 'Artifact ID', placeholder: 'shop', required: true },
+      {
+        key: 'artifactId',
+        label: 'Artifact ID',
+        placeholder: 'every WAR in the group',
+        help: 'Empty finds every artifact of the group that has a WAR, where the repository lists its folders (Nexus, Artifactory, a web folder). * and ? pick some of them, e.g. shop-*.',
+      },
       ...VERSION_FIELDS,
       DEPLOY_AS,
     ],
