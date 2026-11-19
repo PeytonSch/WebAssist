@@ -60,9 +60,13 @@ function parsePage(text: string, url: string): { items: Asset[]; continuationTok
   return { items: data.items, continuationToken: typeof data.continuationToken === 'string' && data.continuationToken ? data.continuationToken : null };
 }
 
-/** shop-1.4.0-SNAPSHOT.war in a raw repository: the name up to the first dash before a digit, and the rest as its version. */
+/**
+ * shop-1.4.0-SNAPSHOT.war in a raw repository: the name up to the first - _ or . before a version
+ * (digits, or v and digits, then a separator or the end), and the rest as its version. So
+ * shop_1.4.0 and shop-v1.4 are versions of shop, while app-2fa is a name.
+ */
 export function splitFileName(base: string): { name: string; version: string | null } {
-  const m = /^(.+?)-(\d.*)$/.exec(base);
+  const m = /^(.+?)[-_.](v?\d+(?:[._-].*)?)$/i.exec(base);
   return m ? { name: m[1], version: m[2] } : { name: base, version: null };
 }
 

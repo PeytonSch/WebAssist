@@ -109,6 +109,8 @@ describe('deploy', () => {
     expect(stripVersion('order-service-2.0')).toBe('order-service');
     expect(stripVersion('app-2fa')).toBe('app-2fa');
     expect(stripVersion('shop-20261116.101500-3')).toBe('shop');
+    expect(['shop_1.4.0', 'shop.1.4.0', 'shop-v1.4', 'shop_V2', 'shop-1.4.0-prod'].map(stripVersion)).toEqual(['shop', 'shop', 'shop', 'shop', 'shop']);
+    expect(['com.acme.shop', 'log4j-web', 'app-2fa', 'shop2', '2048'].map(stripVersion)).toEqual(['com.acme.shop', 'log4j-web', 'app-2fa', 'shop2', '2048']);
     expect(guessTarget('/b/shop-1.4.0-SNAPSHOT.war', ['ROOT', 'shop'])).toBe('shop');
     expect(guessTarget('/b/shop-1.4.0.war', ['shop-1.4.0'])).toBe('shop-1.4.0');
     expect(guessTarget('/b/Shop-1.0.war', ['shop'])).toBe('shop');

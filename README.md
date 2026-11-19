@@ -587,7 +587,9 @@ below the WAR builds. Three kinds of registry cover most setups:
   change it for that package, which is useful where one entry finds a whole group. The name
   is remembered in `registry-state.json`, as is a different name typed into the deploy
   dialog, and **Use default** forgets it. Without one, it is the entry's `deployAs`, else the
-  package's name matched against the webapps there are. The Packages list shows what was last
+  package's name without its version (`shop-1.4.0`, `shop_1.4.0`, `shop.1.4.0` and `shop-v1.4`
+  all deploy as `shop`; a raw repository's files named like that are versions of one package),
+  written as an existing webapp of that name is. The Packages list shows what was last
   deployed from each package. Per package the three newest downloads and the deployed one are
   kept; older ones are deleted.
 - **State.** `registry-state.json` next to the settings file remembers which versions have

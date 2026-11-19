@@ -561,6 +561,10 @@ describe('Nexus 3 search', () => {
     ]);
     expect(splitFileName('my-app-2.0.1-RC1')).toEqual({ name: 'my-app', version: '2.0.1-RC1' });
     expect(splitFileName('ROOT')).toEqual({ name: 'ROOT', version: null });
+    expect(splitFileName('shop_1.4.0')).toEqual({ name: 'shop', version: '1.4.0' });
+    expect(splitFileName('shop-v2.1')).toEqual({ name: 'shop', version: 'v2.1' });
+    expect(splitFileName('app-2fa')).toEqual({ name: 'app-2fa', version: null });
+    expect(splitFileName('app-2fa-1.0')).toEqual({ name: 'app-2fa', version: '1.0' });
   });
 
   it('says so when the address is not a Nexus 3, and lists the repositories when it is', async () => {
@@ -1384,6 +1388,22 @@ describe('download and checksum', () => {
     await svc.setTarget(KEY, 'other');
     await svc.setTarget(KEY, '');
     expect(await pkg()).toMatchObject({ target: 'shop', targetFrom: 'guess' });
+  });
+
+  it('deploys a new package as its name without the version, unless set otherwise', async () => {
+    const raw = (path: string): FakeAsset => ({ path, repository: 'raw-builds', lastModified: '2026-11-14T10:15:02.000+00:00', fileSize: 10, checksum: { sha1: 'c'.repeat(40) } });
+    const fake = await serve(nexusSearch([raw('builds/billing_2.0.1.war'), raw('builds/billing_2.1.0.war'), raw('builds/reports-v3.war')], 50));
+    const search = { repository: 'raw-builds', group: '', name: '', params: '', classifier: '', extension: 'war', versions: 'all' as const, versionPattern: '', deployAs: '' };
+    const { svc } = makeService([registry({ name: 'Raw', type: 'nexus3', url: fake.url, packages: [search] })]);
+    await svc.checkNow();
+    const pkgs = async () => (await svc.snapshot()).registries[0].packages.map((p) => [p.name, p.versionCount, p.target, p.targetFrom]);
+    // One package per name, its versions together, deployed under the bare name.
+    expect(await pkgs()).toEqual([
+      ['billing', 2, 'billing', 'guess'],
+      ['reports', 1, 'reports', 'guess'],
+    ]);
+    await svc.setTarget((await svc.snapshot()).registries[0].packages[0].key, 'ROOT');
+    expect((await pkgs())[0]).toEqual(['billing', 2, 'ROOT', 'package']);
   });
 
   it('makes registry file names safe to write', () => {

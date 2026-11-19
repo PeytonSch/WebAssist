@@ -278,9 +278,13 @@ export async function deployWar(
   return { target, replaced };
 }
 
-/** "shop-1.4.0-SNAPSHOT" becomes "shop": Maven's default file name is <artifactId>-<version>. */
+/**
+ * The name without its version: "shop-1.4.0-SNAPSHOT" (Maven's <artifactId>-<version>),
+ * "shop_1.4.0", "shop.1.4.0" and "shop-v1.4" all become "shop". A dash and digits that are part
+ * of the name ("app-2fa") stay.
+ */
 export function stripVersion(base: string): string {
-  const stripped = base.replace(/-\d+(?:\.\d+)*(?:[-.][A-Za-z0-9]+)*$/, '');
+  const stripped = base.replace(/[-_.]v?\d+(?:\.\d+)*(?:[-._][A-Za-z0-9]+)*$/i, '');
   return stripped || base;
 }
 
