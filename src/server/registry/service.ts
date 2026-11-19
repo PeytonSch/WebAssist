@@ -315,7 +315,7 @@ export class RegistryService {
     const tracked: Tracked = { key: `${r.cfg.name}::${found.id}`, entry, found, versions, latest: null };
     const newest = versions[0];
     if (!newest) {
-      if (found.versions.length) problems.push({ entry: found.coordinates, message: `None of its ${found.versions.length} versions pass the version settings.` });
+      if (found.versions.length) problems.push({ entry: found.coordinates, message: found.versions.length === 1 ? `Its one version, ${found.versions[0].version}, does not pass the version settings.` : `None of its ${found.versions.length} versions pass the version settings.`, filtered: true });
       return tracked;
     }
     let artifact = newest.artifact;
@@ -757,7 +757,7 @@ export class RegistryService {
               : `None of its ${found.versions.length} versions pass the version settings.`,
           });
         }
-        for (const p of problems) if (!/pass the version settings/.test(p.message)) lines.push({ ok: false, entry: p.entry, message: p.message, hint: p.hint });
+        for (const p of problems) if (!p.filtered) lines.push({ ok: false, entry: p.entry, message: p.message, hint: p.hint });
         if (listing.packages.length > shown.length) lines.push({ ok: true, entry: label, message: `…and ${listing.packages.length - shown.length} more packages.` });
         if (listing.hint && listing.packages.length) lines.push({ ok: true, entry: label, message: listing.hint });
       } catch (err) {

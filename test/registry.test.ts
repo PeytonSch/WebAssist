@@ -1072,7 +1072,7 @@ describe('checking for new versions', () => {
       ['Twos', '2.4.0', 2],
       ['None', null, 0],
     ]);
-    expect(registries[3].problems[0].message).toBe('None of its 4 versions pass the version settings.');
+    expect(registries[3].problems[0]).toMatchObject({ message: 'None of its 4 versions pass the version settings.', filtered: true });
   });
 
   it('starts over when the version settings change, so narrowing them does not silence later versions', async () => {

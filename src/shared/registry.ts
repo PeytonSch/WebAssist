@@ -144,7 +144,15 @@ export interface RegistryInfo {
   /** Why the whole registry cannot be used: a setting, an environment variable that is not set. */
   error: string | null;
   /** What went wrong for single package entries; the others still work. */
-  problems: { entry: string; message: string; hint?: string; /** Worth knowing, but nothing is broken. */ quiet?: boolean }[];
+  problems: {
+    entry: string;
+    message: string;
+    hint?: string;
+    /** Worth knowing, but nothing is broken. */
+    quiet?: boolean;
+    /** The package was found, but none of its versions pass the version settings. */
+    filtered?: boolean;
+  }[];
   packages: PackageInfo[];
 }
 

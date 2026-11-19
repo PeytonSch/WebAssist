@@ -278,6 +278,114 @@ function foldCard(id: string, title: string, count: number | null, desc: Child, 
 
 const dirLabel = (dir: string) => (dir ? h('span', { class: 'tm-dir' }, dir) : null);
 
+// ── Searching a list ────────────────────────────────────
+
+/** What is typed in each card's search, by card id. Kept across redraws, not across reloads. */
+const queries = new Map<string, string>();
+const termsOf = (q: string) => q.toLowerCase().split(/\s+/).filter(Boolean);
+
+/** Marks a row as searchable by these texts; the card's search shows or hides it. */
+export function searchable<E extends HTMLElement>(row: E, ...texts: (string | null | undefined | false)[]): E {
+  row.dataset.q = texts.filter(Boolean).join(' ').toLowerCase();
+  return row;
+}
+
+/**
+ * A search field for a card's list: every word typed must appear in a row (name, path, …) for
+ * it to stay. Filters in place as you type; Esc clears it. Not shown while the card is folded,
+ * or while the list is empty and nothing is typed.
+ */
+export function searchBox(id: string, what: string, rows: number): HTMLElement | null {
+  const query = queries.get(id) ?? '';
+  if (collapsed.has(id) || (!rows && !query)) return null;
+  const input = h('input', {
+    type: 'search',
+    class: 'input tm-search',
+    placeholder: `Filter ${what}`,
+    'aria-label': `Filter ${what}`,
+    'data-search': id,
+    'data-f': `search:${id}`,
+    spellcheck: 'false',
+    autocomplete: 'off',
+  }) as HTMLInputElement;
+  input.value = query;
+  input.addEventListener('input', () => {
+    if (input.value) queries.set(id, input.value);
+    else queries.delete(id);
+    filterCard(id);
+  });
+  input.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape') return;
+    // Esc here belongs to the field, not the page.
+    e.preventDefault();
+    e.stopPropagation();
+    if (input.value) {
+      input.value = '';
+      queries.delete(id);
+      filterCard(id);
+    } else input.blur();
+  });
+  return input;
+}
+
+/**
+ * Applies a card's search to its rows: hides those that do not match, notes about them
+ * ([data-q-note]) likewise, and groups ([data-q-group])
+ * left with no match; shows "3 of 12" beside the title and a line when nothing matches.
+ */
+export function filterCard(id: string): void {
+  const section = document.getElementById(`tm-${id}`);
+  const body = section?.querySelector<HTMLElement>('.card-body');
+  if (!section || !body) return;
+  const terms = termsOf(queries.get(id) ?? '');
+  const rows = [...body.querySelectorAll<HTMLElement>('[data-q]')];
+  let shown = 0;
+  for (const row of rows) {
+    const hit = terms.every((t) => row.dataset.q!.includes(t));
+    row.classList.toggle('tm-filtered', !hit);
+    if (hit) shown++;
+  }
+  // Notes about a row (a package's problem) go with the search, but are not counted as rows.
+  for (const note of body.querySelectorAll<HTMLElement>('[data-q-note]')) {
+    note.classList.toggle('tm-filtered', !terms.every((t) => note.dataset.qNote!.includes(t)));
+  }
+  for (const group of body.querySelectorAll<HTMLElement>('[data-q-group]')) {
+    const own = [...group.querySelectorAll<HTMLElement>('[data-q]')];
+    group.classList.toggle('tm-filtered', !!terms.length && own.length > 0 && own.every((r) => r.classList.contains('tm-filtered')));
+  }
+  const count = section.querySelector<HTMLElement>('.card-count');
+  if (count) {
+    count.dataset.total ??= count.textContent ?? '';
+    count.textContent = terms.length ? `${shown.toLocaleString()} of ${rows.length.toLocaleString()}` : count.dataset.total;
+    count.classList.toggle('filtering', !!terms.length);
+  }
+  let none = body.querySelector<HTMLElement>('.tm-nomatch');
+  if (terms.length && rows.length && !shown) {
+    if (!none) {
+      none = h('div', { class: 'tm-missing tm-nomatch' });
+      body.append(none);
+    }
+    none.replaceChildren(`Nothing matches “${queries.get(id)!.trim()}”. `, clearLink(id));
+  } else none?.remove();
+}
+
+function clearLink(id: string): HTMLElement {
+  const b = h('button', { type: 'button', class: 'link' }, 'Clear the filter');
+  b.addEventListener('click', () => {
+    queries.delete(id);
+    const input = document.querySelector<HTMLInputElement>(`input.tm-search[data-search="${CSS.escape(id)}"]`);
+    if (input) {
+      input.value = '';
+      input.focus();
+    }
+    filterCard(id);
+  });
+  return b;
+}
+
+/** A card's tools with its search first. */
+const withSearch = (search: HTMLElement | null, ...tools: Child[]): HTMLElement => h('span', { class: 'tm-tools' }, search, ...tools);
+
 function missing(...text: Child[]): HTMLElement {
   return h('div', { class: 'tm-missing' }, ...text);
 }
@@ -586,7 +694,7 @@ function webappRow(s: TomcatState, app: WebappInfo): HTMLElement {
   const origin = mgr.origin ?? (s.hosted ? location.origin : null);
   const linkable = origin && (app.state === 'running' || (!mgr.ok && app.state === 'deployed' && !!s.hosted));
   const path = linkable ? h('a', { href: origin + app.path, target: '_blank', rel: 'noopener', class: 'tm-path', title: `Open ${origin}${app.path}` }, app.path) : h('span', { class: 'tm-path' }, app.path);
-  return h(
+  const row = h(
     'div',
     { class: `tm-row${busy ? ' busy' : ''}` },
     h('div', { class: 'tm-name' }, h('b', {}, app.name), ...kinds.map((k) => h('span', { class: 'tm-tag' }, k)), self ? h('span', { class: 'tm-tag self', title: SELF_WHY }, 'Debug Hub') : null),
@@ -596,6 +704,7 @@ function webappRow(s: TomcatState, app: WebappInfo): HTMLElement {
     busyNote(`app:${app.name}`) ?? h('span', { class: 'muted', title: app.modified ? new Date(app.modified).toLocaleString() : '' }, [ago(app.modified), fmtBytes(app.bytes)].filter(Boolean).join(' · ')),
     h('div', { class: 'tm-actions' }, ...actions),
   );
+  return searchable(row, app.name, app.path, STATE_LABEL[app.state], ...kinds, self && 'Debug Hub');
 }
 
 function webappsCard(s: TomcatState): HTMLElement {
@@ -608,7 +717,8 @@ function webappsCard(s: TomcatState): HTMLElement {
   if (!s.manager.configured && s.webapps.length) {
     body.push(h('div', { class: 'tm-note' }, 'Without the Tomcat Manager, Disable and Enable are how a webapp is stopped and started. Set up the Manager in ', settingsLink(), ' to start, stop and reload webapps in place.'));
   }
-  const tools = s.settings.webappsDir && !s.problems.some((p) => p.key === 'webappsDir') ? revealButton({ from: 'webapps' }, s.settings.webappsDir) : null;
+  const reveal = s.settings.webappsDir && !s.problems.some((p) => p.key === 'webappsDir') ? revealButton({ from: 'webapps' }, s.settings.webappsDir) : null;
+  const tools = withSearch(searchBox('webapps', 'webapps', s.webapps.length), reveal);
   return foldCard('webapps', 'Webapps', s.settings.webappsDir ? s.webapps.length : null, dirLabel(s.settings.webappsDir), tools, ...body);
 }
 
@@ -621,7 +731,7 @@ function disabledCard(s: TomcatState): HTMLElement {
   }
   body.push(...s.disabled.map((a) => webappRow(s, a)));
   // The folder is created by the first Disable, so there is something to open once something is in it.
-  const tools = s.disabled.length ? revealButton({ from: 'disabled' }, s.settings.disabledDir) : null;
+  const tools = withSearch(searchBox('disabled', 'disabled webapps', s.disabled.length), s.disabled.length ? revealButton({ from: 'disabled' }, s.settings.disabledDir) : null);
   return foldCard('disabled', 'Disabled webapps', s.settings.disabledDir ? s.disabled.length : null, dirLabel(s.settings.disabledDir), tools, ...body);
 }
 
@@ -634,25 +744,25 @@ function warsCard(s: TomcatState): HTMLElement {
   }
   for (const war of s.wars) {
     const busy = T.busy.has(`war:${war.file}`);
-    body.push(
+    const row = h(
+      'div',
+      { class: `tm-row tm-war${war.fresh ? ' fresh' : ''}` },
+      h('div', { class: 'tm-name', title: war.file }, h('b', {}, war.name), war.fresh ? h('span', { class: 'tm-tag new' }, 'New') : null),
+      // Clipped from the left (the end of a path says most); the marks keep the slashes in place.
+      h('span', { class: 'muted tm-folder', title: folderOf(war.file) }, `\u200E${folderOf(war.file)}\u200E`),
+      h('span', { class: 'muted', title: `Deploys as ${war.target}.war` }, `→ ${war.target}`),
+      h('span', { class: 'muted', title: new Date(war.modified).toLocaleString() }, `built ${ago(war.modified)} · ${fmtBytes(war.bytes)}`),
       h(
         'div',
-        { class: `tm-row tm-war${war.fresh ? ' fresh' : ''}` },
-        h('div', { class: 'tm-name', title: war.file }, h('b', {}, war.name), war.fresh ? h('span', { class: 'tm-tag new' }, 'New') : null),
-        // Clipped from the left (the end of a path says most); the marks keep the slashes in place.
-        h('span', { class: 'muted tm-folder', title: folderOf(war.file) }, `\u200E${folderOf(war.file)}\u200E`),
-        h('span', { class: 'muted', title: `Deploys as ${war.target}.war` }, `→ ${war.target}`),
-        h('span', { class: 'muted', title: new Date(war.modified).toLocaleString() }, `built ${ago(war.modified)} · ${fmtBytes(war.bytes)}`),
-        h(
-          'div',
-          { class: 'tm-actions' },
-          revealButton({ file: war.file }, war.file),
-          button('Deploy…', () => void openDeploy(war), { primary: war.fresh, disabled: busy || !s.settings.webappsDir, title: s.settings.webappsDir ? undefined : 'Set the webapps folder in Settings › Tomcat' }),
-        ),
+        { class: 'tm-actions' },
+        revealButton({ file: war.file }, war.file),
+        button('Deploy…', () => void openDeploy(war), { primary: war.fresh, disabled: busy || !s.settings.webappsDir, title: s.settings.webappsDir ? undefined : 'Set the webapps folder in Settings › Tomcat' }),
       ),
     );
+    body.push(searchable(row, war.name, folderOf(war.file), war.target, war.fresh && 'new'));
   }
-  return foldCard('wars', 'WAR builds', s.settings.warWatch.length ? s.wars.length : null, s.settings.warWatch.length ? dirLabel(s.settings.warWatch.join(' · ')) : 'From the watch folders in Settings.', null, ...body);
+  const tools = withSearch(searchBox('wars', 'WAR builds', s.wars.length));
+  return foldCard('wars', 'WAR builds', s.settings.warWatch.length ? s.wars.length : null, s.settings.warWatch.length ? dirLabel(s.settings.warWatch.join(' · ')) : 'From the watch folders in Settings.', tools, ...body);
 }
 
 function render(): void {
@@ -680,8 +790,17 @@ function render(): void {
   const consoleFocused = con.el.contains(document.activeElement);
   const focusedInConsole = consoleFocused ? (document.activeElement as HTMLElement) : null;
   con.detach();
-  const focusedLabel = !consoleFocused && (document.activeElement as HTMLElement | null)?.closest('.tomcat') ? document.activeElement?.textContent : null;
+  const active = document.activeElement as HTMLElement | null;
+  // A search field being typed in is found again by its card, with the caret where it was.
+  const search = active instanceof HTMLInputElement && active.classList.contains('tm-search') ? { id: active.dataset.search!, from: active.selectionStart, to: active.selectionEnd } : null;
+  const focusedLabel = !consoleFocused && !search && active?.closest('.tomcat') ? active.textContent : null;
   content.replaceChildren(...[banner, serverCard(s), consoleCard(s), webappsCard(s), disabledCard(s), warsCard(s), packagesCard(!!s.settings.webappsDir)].filter((x): x is HTMLElement => !!x));
+  for (const id of ['webapps', 'disabled', 'wars', 'packages']) filterCard(id);
+  if (search) {
+    const input = content.querySelector<HTMLInputElement>(`input.tm-search[data-search="${CSS.escape(search.id)}"]`);
+    input?.focus({ preventScroll: true });
+    input?.setSelectionRange(search.from, search.to);
+  }
   con.update(s.consoles, T.open && !collapsed.has('console'));
   con.attached();
   // Moving the console out and back took the focus from it.

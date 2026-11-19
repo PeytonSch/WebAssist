@@ -2,7 +2,7 @@ import type { DownloadInfo, DownloadResult, PackageInfo, PackageNotice, Registry
 import { REGISTRY_FORMS } from '../shared/registry-forms';
 import { fmtBytes, h, type Child } from './dom';
 import { openSettings } from './settings';
-import { ago, api, button, card, missing, nameProblem, openDeploy, renderNotices, tomcatOpen } from './tomcat';
+import { ago, api, button, card, filterCard, missing, nameProblem, openDeploy, renderNotices, searchable, searchBox, tomcatOpen } from './tomcat';
 
 /**
  * Packages from the registries in Settings, on the Tomcat page: each package with its versions
@@ -14,6 +14,15 @@ import { ago, api, button, card, missing, nameProblem, openDeploy, renderNotices
  */
 
 const POLL_MS = 15_000;
+const HIDE_KEY = 'dh.packages.hideUnmatched';
+
+function loadHide(): boolean {
+  try {
+    return localStorage.getItem(HIDE_KEY) === 'true';
+  } catch {
+    return false;
+  }
+}
 const MAX_NOTICES = 3;
 
 const P = {
@@ -22,6 +31,8 @@ const P = {
   loadError: null as string | null,
   /** The version chosen in each package's list, by package key. Not there: the latest. */
   picked: new Map<string, string>(),
+  /** Leave out packages none of whose versions pass the version settings, and the notes about them. */
+  hideUnmatched: loadHide(),
   /** The package whose Deploy as is being edited, and what is typed so far. */
   editing: null as { key: string; value: string; error: string | null } | null,
   /** Requests in flight: package keys, and "check". */
@@ -364,7 +375,7 @@ function packageRow(p: PackageInfo, canDeploy: boolean): HTMLElement {
     actions.push(b);
   }
 
-  return h(
+  const row = h(
     'div',
     { class: `tm-row tm-pkg${p.fresh ? ' fresh' : ''}${editing ? ' editing' : ''}` },
     h(
@@ -380,7 +391,11 @@ function packageRow(p: PackageInfo, canDeploy: boolean): HTMLElement {
     // The editor takes the actions' room too.
     editing ? null : h('div', { class: 'tm-actions' }, ...actions),
   );
+  return searchable(row, p.name, p.coordinates, p.target, p.registry, p.fresh && 'new', picked?.snapshot && 'snapshot');
 }
+
+/** Found, but none of its versions pass the version settings (Versions, Version pattern). */
+const unmatched = (p: PackageInfo) => !p.versions.length;
 
 function registryBlock(r: RegistryInfo, canDeploy: boolean): HTMLElement {
   const when = r.checking ? 'Checking…' : r.checkedAt ? `checked ${ago(r.checkedAt)}` : r.error ? '' : 'not checked yet';
@@ -397,13 +412,21 @@ function registryBlock(r: RegistryInfo, canDeploy: boolean): HTMLElement {
   ];
   if (r.error) body.push(h('div', { class: 'tm-note warn' }, r.error, ' ', registriesLink('Fix in Settings')));
   for (const p of r.problems) {
-    body.push(h('div', { class: `tm-note${p.quiet ? '' : ' warn'}` }, h('b', {}, `${p.entry}: `), p.message, p.hint ? ` ${p.hint}` : ''));
+    if (P.hideUnmatched && p.filtered) continue;
+    const note = h('div', { class: `tm-note${p.quiet ? '' : ' warn'}` }, h('b', {}, `${p.entry}: `), p.message, p.hint ? ` ${p.hint}` : '');
+    note.dataset.qNote = `${p.entry} ${p.message}`.toLowerCase();
+    body.push(note);
   }
-  body.push(...r.packages.map((p) => packageRow(p, canDeploy)));
+  const shown = P.hideUnmatched ? r.packages.filter((p) => !unmatched(p)) : r.packages;
+  body.push(...shown.map((p) => packageRow(p, canDeploy)));
+  if (r.packages.length && !shown.length) {
+    const n = r.packages.length;
+    body.push(missing(`${n === 1 ? 'Its package is' : `All ${n} packages are`} hidden: none of ${n === 1 ? 'its' : 'their'} versions pass the version settings.`));
+  }
   if (!r.packages.length && !r.problems.length && !r.error && r.checkedAt) {
     body.push(missing('Nothing to look for in this registry yet. Add packages in ', registriesLink('Settings › Package registries'), '.'));
   }
-  return h('div', { class: 'pkg-reg' }, ...body);
+  return h('div', { class: 'pkg-reg', 'data-q-group': '' }, ...body);
 }
 
 function build(canDeploy: boolean): HTMLElement {
@@ -424,9 +447,35 @@ function build(canDeploy: boolean): HTMLElement {
   const checking = P.busy.has('check');
   const check = button(checking ? 'Checking…' : 'Check now', () => void checkNow(), { disabled: checking || !s?.registries.some((r) => !r.error), title: 'Look for new versions in every registry now' });
   check.dataset.f = 'check';
-  const el = card('packages', 'Packages', 'From the package registries in Settings.', s?.registries.length ? check : null, ...body);
+  const all = allPackages();
+  const hidden = all.filter(unmatched).length;
+  const tools = s?.registries.length
+    ? h('span', { class: 'tm-tools' }, searchBox('packages', 'packages', all.length), hidden ? hideToggle(hidden) : null, check)
+    : null;
+  const el = card('packages', 'Packages', 'From the package registries in Settings.', tools, ...body);
   el.dataset.canDeploy = String(canDeploy);
   return el;
+}
+
+/** "Hide 3 with no matching version": packages the version settings leave nothing of. */
+function hideToggle(count: number): HTMLElement {
+  const box = h('input', { type: 'checkbox', 'data-f': 'hide-unmatched' }) as HTMLInputElement;
+  box.checked = P.hideUnmatched;
+  box.addEventListener('change', () => {
+    P.hideUnmatched = box.checked;
+    try {
+      localStorage.setItem(HIDE_KEY, String(box.checked));
+    } catch {
+      /* remembered for this page only */
+    }
+    redrawCard();
+  });
+  return h(
+    'label',
+    { class: 'check pkg-hide', title: 'Leave out packages none of whose versions pass the version settings (Versions and Version pattern in Settings › Package registries), and the notes about them' },
+    box,
+    ` Hide ${count} with no matching version`,
+  );
 }
 
 /** The Packages card, for the Tomcat page. `canDeploy`: the webapps folder is set. */
@@ -446,9 +495,10 @@ function redrawCard(): void {
   const next = build(old.dataset.canDeploy === 'true');
   old.replaceWith(next);
   P.card = next;
+  filterCard('packages');
   const again = f ? [...next.querySelectorAll<HTMLElement>('[data-f]')].find((el) => el.dataset.f === f) : null;
   again?.focus({ preventScroll: true });
-  if (again instanceof HTMLInputElement) again.setSelectionRange(again.value.length, again.value.length);
+  if (again instanceof HTMLInputElement && (again.type === 'text' || again.type === 'search')) again.setSelectionRange(again.value.length, again.value.length);
 }
 
 function redrawAll(): void {

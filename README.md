@@ -399,6 +399,12 @@ Hub. Set it up under Settings → Tomcat server; the page says what is missing.
 - **Sections fold.** Each section's title folds it away (remembered); Webapps, Disabled webapps
   and WAR builds show how many they hold beside the title. A webapp being started, stopped or
   reloaded shows a spinner beside its buttons until it is done.
+- **Search.** Webapps, Disabled webapps, WAR builds and Packages each have a filter field:
+  every word typed must appear in a row's name, path, state or (for packages) coordinates,
+  registry and deploy-as name. The count beside the title becomes "3 of 12"; Esc clears the
+  field. Packages also has **Hide N with no matching version**, which leaves out packages
+  found in a registry none of whose versions pass the version settings (Versions, Version
+  pattern), and the notes about them; it is remembered.
 - **Start commands.** To bring up the whole dev setup at once, add start commands under
   Settings → Tomcat server. Start Tomcat runs them first, in order, then Tomcat, then Chrome if
   **Also start Chrome** is on. Each command runs in the system shell (`cmd.exe` on Windows,
