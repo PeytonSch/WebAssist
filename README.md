@@ -399,6 +399,16 @@ Hub. Set it up under Settings → Tomcat server; the page says what is missing.
 - **Sections fold.** Each section's title folds it away (remembered); Webapps, Disabled webapps
   and WAR builds show how many they hold beside the title. A webapp being started, stopped or
   reloaded shows a spinner beside its buttons until it is done.
+- **Webapp sets.** Save the webapps you need for a task as a named set, and switch tasks by
+  applying another one. **New set…** ticks the webapps deployed now (untick or tick others,
+  disabled ones included); **Apply…** shows what it will move and then disables every
+  deployed webapp not in the set (stopping a running one first, through the Manager) and
+  enables the ones in it that are disabled. A webapp in the set that is neither deployed nor
+  disabled is listed as not found: deploy it to have it. The Tomcat Manager that Debug Hub
+  uses, and Debug Hub itself when it runs inside this Tomcat, are never disabled by a set. A
+  webapp that cannot be moved (e.g. a disabled copy of it is already there) is skipped and
+  named; the rest are moved. The set that matches what is deployed is marked **Current**.
+  Sets are kept in `webapp-sets.json` next to the settings file, which can be edited by hand.
 - **Search.** Webapps, Disabled webapps, WAR builds and Packages each have a filter field:
   every word typed must appear in a row's name, path, state or (for packages) coordinates,
   registry and deploy-as name. The count beside the title becomes "3 of 12"; Esc clears the

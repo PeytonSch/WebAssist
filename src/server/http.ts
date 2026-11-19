@@ -66,6 +66,8 @@ export function startServer(hub: Hub, uiDir: string, opts: ServerOptions): Promi
   hub.tomcat.chromeStarter = () => startChrome(hub.cfg, configDir);
   // What is known about packages, and their downloads, live next to the settings file.
   hub.registry.useDataDir(configDir);
+  // So are the webapp sets of the Tomcat page.
+  hub.tomcat.useDataDir(configDir);
   // Saved API requests live next to the settings file.
   const catalog = new CatalogStore(join(configDir, CATALOG_FILE));
   // Saves run one at a time, so two quick saves cannot interleave their reconfigures.

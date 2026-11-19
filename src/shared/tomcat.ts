@@ -226,6 +226,8 @@ export interface TomcatState {
   /** The latest Restart Tomcat. */
   restart: RestartState | null;
   wars: WarInfo[];
+  /** Saved sets of webapps, each with what applying it would move. */
+  sets: WebappSets;
   /** Set when Debug Hub runs as a webapp inside the Tomcat this page manages. */
   hosted?: {
     /** The context path Debug Hub is served under, "/" for ROOT. */
@@ -277,4 +279,49 @@ export interface KeepPreview {
   truncated: boolean;
   /** Why files cannot be kept, e.g. the new WAR is a ZIP64 archive. */
   problem: string | null;
+}
+
+// ── Webapp sets ─────────────────────────────────────────
+
+/** A named set of webapps to have deployed together, e.g. for one debugging task. */
+export interface WebappSet {
+  name: string;
+  /** Webapp names (as in webapps: shop, ROOT, shop##2). */
+  webapps: string[];
+  updated: string;
+}
+
+/** What applying a set would do now. */
+export interface WebappSetPlan {
+  /** Deployed and not in the set: moved to the disabled folder. */
+  disable: string[];
+  /** In the set and disabled: moved back into webapps. */
+  enable: string[];
+  /** In the set, but neither deployed nor disabled: deploy them to have them. */
+  missing: string[];
+  /** Deployed, not in the set, but never disabled by a set: the Tomcat Manager, Debug Hub itself. */
+  kept: string[];
+}
+
+export interface WebappSetInfo extends WebappSet {
+  plan: WebappSetPlan;
+  /** Nothing to move: what is deployed is this set (missing webapps aside). */
+  current: boolean;
+}
+
+export interface WebappSets {
+  list: WebappSetInfo[];
+  /** Why sets cannot be saved or read, e.g. no settings folder, or an unreadable file. */
+  error: string | null;
+  /** The set being applied now, if one is. */
+  applying: string | null;
+}
+
+/** POST /api/tomcat/sets/apply. */
+export interface ApplySetResult {
+  message: string;
+  disabled: string[];
+  enabled: string[];
+  missing: string[];
+  failed: { name: string; error: string }[];
 }

@@ -3,6 +3,7 @@ import { basename, isAbsolute, join, relative } from 'node:path';
 import type { HubEvent, Level } from '../../shared/types';
 import type {
   AppFolder, CommandRun, ConsoleChunk, ConsoleSource, KeepPreview, RestartState, ScriptKind, ScriptRun, StartSequence, TomcatState, WarInfo, WebappAction, WebappInfo,
+  ApplySetResult, WebappSet, WebappSets,
 } from '../../shared/tomcat';
 import { EntryGrouper } from '../collectors/logfile';
 import type { Config } from '../config';
@@ -22,6 +23,7 @@ import { OutputFollower, readChunk, ScriptRunner } from './scripts';
 import { Sequence } from './sequence';
 import { checkName, contextPath, deployWar, guessTarget, listApps, moveApp, removeApp, TomcatError, type DiskApp } from './webapps';
 import { WarWatcher, type WatchedWar } from './warwatch';
+import { planSet, SetError, SETS_FILE, WebappSetStore } from './sets';
 import { ZipError, type NewFile, type RewriteResult } from './zip';
 
 export interface TomcatHooks {
@@ -96,6 +98,10 @@ export class TomcatService {
   private started = false;
   /** Starts Chrome for "Also start Chrome"; without it that step reports it is not available. */
   chromeStarter: ChromeStarter | null = null;
+  /** Webapp sets, once the settings folder is known. */
+  private sets: WebappSetStore | null = null;
+  /** The set being applied now. */
+  private applying: string | null = null;
 
   constructor(private cfg: Config, private hooks: TomcatHooks, private opts: TomcatServiceOptions = {}) {
     this.watcher = this.makeWatcher();
@@ -107,6 +113,11 @@ export class TomcatService {
       onStart: (run, logFile) => this.followCommand(run, logFile),
       onExit: (run) => void this.commandExited(run),
     });
+  }
+
+  /** Where webapp sets are kept: the settings file's folder. Set by the HTTP server, which knows it. */
+  useDataDir(dir: string): void {
+    this.sets = new WebappSetStore(join(dir, SETS_FILE));
   }
 
   private makeWatcher(): WarWatcher {
@@ -369,6 +380,7 @@ export class TomcatService {
       consoles: await this.consoleSources(),
       restart: this.restartState ? structuredClone(this.restartState) : null,
       wars: this.watcher.list().map((w) => this.warInfo(w, names)),
+      sets: this.setsInfo(webapps.map((a) => a.name), disabled.map((a) => a.name)),
     };
   }
 
@@ -427,6 +439,90 @@ export class TomcatService {
     const { moved } = await moveApp(name, disabledDir, webappsDir);
     this.note('info', `Enabled webapp ${path}: moved ${moved.join(' and ')} back into webapps`, { webapp: name, action });
     return `Enabled ${name}: moved ${moved.join(' and ')} back to webapps. Tomcat deploys it within a few seconds.`;
+  }
+
+  // ── Webapp sets ───────────────────────────────────────
+
+  /** Never disabled by a set: the Manager this page uses, and Debug Hub itself. */
+  private keptBySets = (name: string): boolean => this.isManagerApp(name) || isSelfWebapp(this.cfg, { name });
+
+  private setsInfo(deployed: string[], disabled: string[]): WebappSets {
+    if (!this.sets) return { list: [], error: 'Webapp sets need a settings folder, which this Debug Hub was started without.', applying: null };
+    const list = this.sets.list().map((set) => {
+      const plan = planSet(set, deployed, disabled, this.keptBySets);
+      return { ...set, plan, current: !plan.disable.length && !plan.enable.length };
+    });
+    return { list, error: this.sets.problem, applying: this.applying };
+  }
+
+  private needSets(): WebappSetStore {
+    if (!this.sets) throw new TomcatError('Webapp sets need a settings folder, which this Debug Hub was started without.', 500);
+    return this.sets;
+  }
+
+  private setCall<R>(fn: () => R): R {
+    try {
+      return fn();
+    } catch (err) {
+      if (err instanceof SetError) throw new TomcatError(err.message, err.status);
+      throw err;
+    }
+  }
+
+  /** Saves a set, new or changed; `previous` is its old name when it is renamed. */
+  saveSet(input: unknown, previous?: string): WebappSet {
+    const store = this.needSets();
+    const set = this.setCall(() => store.save(input, previous));
+    this.note('info', `Saved webapp set ${set.name}: ${set.webapps.join(', ') || 'no webapps'}`, { set: set.name });
+    return set;
+  }
+
+  deleteSet(name: string): void {
+    const store = this.needSets();
+    this.setCall(() => store.delete(name));
+    this.note('info', `Deleted webapp set ${name}`, { set: name });
+  }
+
+  /**
+   * Makes a set what is deployed: disables the webapps not in it (stopping running ones first,
+   * through the Manager), then enables those of it that are disabled. Goes on past a webapp that
+   * cannot be moved, and says which. Webapps in the set that are nowhere are listed as missing.
+   */
+  async applySet(name: string): Promise<ApplySetResult> {
+    const set = this.setCall(() => this.needSets().get(name));
+    if (this.applying) throw new TomcatError(`The set ${this.applying} is being applied. Wait for it to finish.`, 409);
+    this.needFolders(true);
+    this.applying = set.name;
+    const result: ApplySetResult = { message: '', disabled: [], enabled: [], missing: [], failed: [] };
+    try {
+      const { webapps, disabled } = await this.disk();
+      const plan = planSet(set, webapps.map((a) => a.name), disabled.map((a) => a.name), this.keptBySets);
+      result.missing = plan.missing;
+      for (const [names, action, done] of [
+        [plan.disable, 'disable', result.disabled],
+        [plan.enable, 'enable', result.enabled],
+      ] as const) {
+        for (const app of names) {
+          try {
+            await this.webappAction(app, action);
+            done.push(app);
+          } catch (err) {
+            result.failed.push({ name: app, error: (err as Error).message });
+          }
+        }
+      }
+      const parts = [
+        result.disabled.length ? `disabled ${result.disabled.join(', ')}` : '',
+        result.enabled.length ? `enabled ${result.enabled.join(', ')}` : '',
+      ].filter(Boolean);
+      result.message = parts.length ? `Applied ${set.name}: ${parts.join('; ')}.` : `${set.name} is already what is deployed.`;
+      if (result.missing.length) result.message += ` Not found, deploy to add: ${result.missing.join(', ')}.`;
+      if (result.failed.length) result.message += ` Could not move: ${result.failed.map((f) => f.name).join(', ')}.`;
+      this.note(result.failed.length ? 'warn' : 'info', result.message, { set: set.name, ...result, message: undefined });
+      return result;
+    } finally {
+      this.applying = null;
+      }
   }
 
   // ── Delete ────────────────────────────────────────────

@@ -54,6 +54,9 @@ const strings = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is
  *   POST /api/tomcat/delete                  { name, from, items: [names confirmed] }
  *   POST /api/tomcat/reveal                  { file } a watched WAR, { name, from } a webapp, { from } a folder
  *   POST /api/tomcat/dismiss                 { file }
+ *   POST /api/tomcat/sets/save               { name, webapps: [names], previous?: old name } save a webapp set
+ *   POST /api/tomcat/sets/delete             { name }
+ *   POST /api/tomcat/sets/apply              { name } disable what is not in the set, enable what is; answers when done
  */
 export async function tomcatRoute(
   tomcat: TomcatService,
@@ -126,6 +129,15 @@ export async function tomcatRoute(
       else await tomcat.reveal({ from: folder(b.from), name: typeof b.name === 'string' ? b.name : undefined });
       return json(res, 200, { ok: true }), true;
     }
+    if (path === '/api/tomcat/sets/save') {
+      const b = await body();
+      return json(res, 200, { set: tomcat.saveSet(b, typeof b.previous === 'string' ? b.previous : undefined) }), true;
+    }
+    if (path === '/api/tomcat/sets/delete') {
+      tomcat.deleteSet(String((await body()).name ?? ''));
+      return json(res, 200, { ok: true }), true;
+    }
+    if (path === '/api/tomcat/sets/apply') return json(res, 200, await tomcat.applySet(String((await body()).name ?? ''))), true;
     if (path === '/api/tomcat/dismiss') {
       tomcat.dismiss(String((await body()).file ?? ''));
       return json(res, 200, { ok: true }), true;

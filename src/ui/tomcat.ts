@@ -3,6 +3,7 @@ import type { AppFolder, CommandRun, DeleteItem, LaunchWay, RestartState, Script
 import { $, fmtBytes, h, type Child } from './dom';
 import { confirmStopOwnTomcat, hostedNote, onHubMachine, SELF_WHY } from './hosted';
 import { packageNoticeCount, packageNotices, packagesCard, syncPackages } from './registry';
+import { setsCard } from './webappsets';
 import { KeepFiles } from './keepfiles';
 import { closeSettings, openSettings, settingsOpen } from './settings';
 import { TomcatConsole } from './tomcatconsole';
@@ -140,7 +141,7 @@ function schedule(): void {
   // Faster while something is under way; a Tomcat running in the foreground is not that (its output is in the console).
   const start = T.state?.scripts.start;
   const starting = !!start?.running && (!start.foreground || Date.now() - Date.parse(start.startedAt) < 60_000);
-  const running = !!(starting || T.state?.scripts.stop?.running || T.state?.sequence?.running || T.state?.restart?.running);
+  const running = !!(starting || T.state?.scripts.stop?.running || T.state?.sequence?.running || T.state?.restart?.running || T.state?.sets.applying);
   T.timer = window.setTimeout(async () => {
     if (!document.hidden) await refresh();
     schedule();
@@ -794,7 +795,7 @@ function render(): void {
   // A search field being typed in is found again by its card, with the caret where it was.
   const search = active instanceof HTMLInputElement && active.classList.contains('tm-search') ? { id: active.dataset.search!, from: active.selectionStart, to: active.selectionEnd } : null;
   const focusedLabel = !consoleFocused && !search && active?.closest('.tomcat') ? active.textContent : null;
-  content.replaceChildren(...[banner, serverCard(s), consoleCard(s), webappsCard(s), disabledCard(s), warsCard(s), packagesCard(!!s.settings.webappsDir)].filter((x): x is HTMLElement => !!x));
+  content.replaceChildren(...[banner, serverCard(s), consoleCard(s), setsCard(s), webappsCard(s), disabledCard(s), warsCard(s), packagesCard(!!s.settings.webappsDir)].filter((x): x is HTMLElement => !!x));
   for (const id of ['webapps', 'disabled', 'wars', 'packages']) filterCard(id);
   if (search) {
     const input = content.querySelector<HTMLInputElement>(`input.tm-search[data-search="${CSS.escape(search.id)}"]`);
@@ -1247,4 +1248,10 @@ export function initTomcat(opts: { onToggle: (open: boolean) => void }): void {
 
 // ── For the Packages card and its notices (src/ui/registry.ts) ──
 // They are part of this page and look like the rest of it, so they are built from its parts.
-export { ago, api, button, card, missing, openDeploy, renderNotices };
+export { act, ago, api, busyNote, button, card, foldCard, isManagerApp, missing, openDeploy, refresh as refreshTomcat, renderNotices, settingsLink };
+
+/** The Tomcat page's last known state. */
+export const tomcatState = (): TomcatState | null => T.state;
+
+/** Whether an action whose key starts with this is under way, e.g. "set:". */
+export const busyWith = (prefix: string): boolean => [...T.busy.keys()].some((k) => k.startsWith(prefix));
