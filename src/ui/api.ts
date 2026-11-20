@@ -22,6 +22,7 @@ import { replayFromEvent, type Replay } from '../shared/replay';
 import { confirmDialog } from './confirm';
 import { $, fmtBytes, h, type Child } from './dom';
 import { bodyLang, highlight, paint } from './highlight';
+import { isXmlBody, prettyXml } from './xmlmodel';
 import { closeSettings, openSettings, settingsOpen } from './settings';
 import { closeTomcat } from './tomcat';
 
@@ -133,6 +134,7 @@ let hooks = {
   showEvent: (_id: string) => undefined as void,
 };
 let jsonViewer: JsonViewerOpener | null = null;
+let xmlViewer: JsonViewerOpener | null = null;
 const root = () => $('api');
 
 // ── Helpers ─────────────────────────────────────────────
@@ -1382,14 +1384,18 @@ function renderResponse(): void {
   }
   const ctype = r.headers.find(([n]) => n.toLowerCase() === 'content-type')?.[1] ?? null;
   const pretty = r.binary ? null : prettyJson(r.body);
-  const shown = pretty ?? r.body;
+  // An XML body (a SOAP response, usually on one line) is indented too, and opens in the XML viewer.
+  const xml = !pretty && !r.binary && !!r.body && isXmlBody(r.body, ctype);
+  const shown = pretty ?? (xml ? prettyXml(r.body) : null) ?? r.body;
   const timeline = button('Show in timeline', () => {
     closeApi();
     hooks.showEvent(r.requestEventId);
   }, { title: 'Open this request on the timeline, with the server events it caused' });
   const viewer = jsonViewer && pretty
     ? button('Open in JSON viewer', () => jsonViewer?.(r.body, { title: `${r.method} ${r.url} → ${r.status ?? ''}` }), { title: 'Browse the JSON body in the full-window viewer' })
-    : null;
+    : xmlViewer && xml
+      ? button('Open in XML viewer', () => xmlViewer?.(r.body, { title: `${r.method} ${r.url} → ${r.status ?? ''}` }), { title: 'Browse the XML body in the full-window viewer: tree, XPath, and the SOAP operation and faults' })
+      : null;
   const copy = !r.binary && r.body
     ? button('Copy', async () => {
         try {
@@ -1523,6 +1529,12 @@ export function setJsonViewerOpener(fn: JsonViewerOpener | null): void {
   if (A.open) renderResponse();
 }
 
+/** Connects the "Open in XML viewer" button, shown for XML responses. */
+export function setXmlViewerOpener(fn: JsonViewerOpener | null): void {
+  xmlViewer = fn;
+  if (A.open) renderResponse();
+}
+
 export function apiOpen(): boolean {
   return A.open;
 }
@@ -1583,8 +1595,8 @@ export function initApi(opts: { onToggle: (open: boolean) => void; showEvent: (i
   sync();
 
   document.addEventListener('keydown', (e) => {
-    // The JSON viewer, opened from a response, covers this screen and has its own keys.
-    if (!A.open || document.querySelector('dialog[open]') || document.body.classList.contains('json-open')) return;
+    // The JSON or XML viewer, opened from a response, covers this screen and has its own keys.
+    if (!A.open || document.querySelector('dialog[open]') || document.body.classList.contains('json-open') || document.body.classList.contains('xml-open')) return;
     if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
       e.preventDefault();
       void send();

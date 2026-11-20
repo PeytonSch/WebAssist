@@ -1907,7 +1907,10 @@ pre.code.api-res-body { max-height: 70vh; overflow: auto; }
 body.json-open .filterbar,
 body.json-open #main,
 /* Opened from the API screen's response: on top of it, which returns on close. */
-body.json-open #api { display: none; }
+body.json-open #api,
+body.xml-open .filterbar,
+body.xml-open #main,
+body.xml-open #api { display: none; }
 
 /* The detail panel's "JSON viewer" buttons. */
 .sec-head .jv-open + .copy { margin-left: 0; }
@@ -1939,6 +1942,7 @@ details.raw summary .jv-open { margin-left: 10px; text-transform: none; letter-s
 .jv-banner.warn { color: var(--warn); background: var(--warn-soft); border-color: color-mix(in srgb, var(--warn) 30%, transparent); }
 .jv-banner.error { color: var(--error); background: var(--error-soft); border-color: color-mix(in srgb, var(--error) 30%, transparent); }
 .jv-banner .muted { color: var(--text-2); }
+.jv-banner.info { color: var(--text-2); background: var(--surface-2); border-color: var(--border); }
 
 .jv-tools {
   flex: none;
@@ -2036,7 +2040,8 @@ details.raw summary .jv-open { margin-left: 10px; text-transform: none; letter-s
 .jv-sug-detail { flex: none; margin-left: auto; padding-left: 12px; color: var(--muted); font-size: 11.5px; }
 
 .jv-body { flex: 1; min-height: 0; display: flex; }
-.jv-main { flex: 1; min-width: 0; display: flex; flex-direction: column; background: var(--surface); }
+/* min-height too: stacked above the side panel (narrow windows) it must not grow to fit every row. */
+.jv-main { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; background: var(--surface); }
 .jv-side {
   width: 380px;
   flex: none;
@@ -2176,6 +2181,79 @@ pre.code.jv-raw { flex: 1; min-height: 0; max-height: none; margin: 0; border: 0
 .jv-note { margin-top: 10px; font-size: 12px; color: var(--text-2); }
 .jv-note.warn { color: var(--warn); }
 pre.code.jv-value { max-height: none; }
+
+/* ── XML viewer ──────────────────────────────────────── */
+/* src/ui/xmlviewer.ts. The screen, toolbar, lists and side panel are the JSON viewer's (jv-*). */
+
+.xv-name { flex: none; color: var(--syn-kw); }
+/* The SOAP Envelope, Header and Body: structure around the content. */
+.xv-name.frame { color: var(--text-2); }
+.xv-name.fault { color: var(--error); font-weight: 600; }
+.xv-prefix { color: var(--muted); }
+.xv-name.fault .xv-prefix { color: inherit; opacity: 0.7; }
+.xv-attrpair { flex: 0 1 auto; min-width: 24px; margin-left: 10px; overflow: hidden; text-overflow: ellipsis; }
+.xv-attr { color: var(--syn-key); }
+.xv-eq { color: var(--muted); }
+.xv-aval { color: var(--syn-str); }
+.jv-row .xv-text, .jv-row .xv-comment, .jv-row .jv-val.xv-aval { margin-left: 10px; }
+.jv-row .xv-eq + .jv-val.xv-aval { margin-left: 0; }
+.xv-text { color: var(--text); }
+.xv-comment { color: var(--muted); font-style: italic; }
+/* What kind of node a row without a name is, and markers such as "empty". */
+.xv-kind, .xv-empty, .xv-ns { flex: none; margin-left: 10px; color: var(--muted); font: 11px var(--sans); }
+.jv-tw + .xv-kind, .jv-tw + .xv-comment, .xv-result + .xv-kind { margin-left: 0; }
+.xv-kind + .xv-text { margin-left: 8px; }
+.xv-empty { font-style: italic; }
+.xv-ns { cursor: help; text-decoration: underline dotted; text-underline-offset: 3px; }
+.xv-result { margin-right: 8px; min-width: 18px; text-align: right; }
+.xv-tree .jv-count { margin-left: 10px; }
+.xv-nested { flex: none; margin-left: 8px; color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, transparent); background: var(--accent-soft); font: 600 10.5px/17px var(--sans); }
+.jv-badge.xv-op { color: var(--accent); background: var(--accent-soft); }
+.jv-badge.xv-faultbadge { color: var(--error); background: var(--error-soft); }
+.jv-td.xv-text, .jv-td.xv-aval { display: block; }
+
+/* After the title: the SOAP version and the operation. */
+.xv-chip {
+  flex: none;
+  align-self: center;
+  height: 22px;
+  padding: 0 9px;
+  border: 1px solid var(--border-strong);
+  border-radius: 11px;
+  background: var(--surface-2);
+  color: var(--text-2);
+  font: 600 11px/20px var(--sans);
+}
+button.xv-chip { cursor: pointer; }
+.xv-chip.op { color: var(--syn-kw); font: 500 12px/20px var(--mono); max-width: 46%; overflow: hidden; text-overflow: ellipsis; }
+.xv-chip.op:hover { border-color: var(--accent); }
+/* With the chips there is less room: the address gives way first, the status and sizes stay whole. */
+.xmlv .jv-meta ~ .jv-meta { flex: none; }
+.xv-chip.fault { color: var(--error); background: var(--error-soft); border-color: color-mix(in srgb, var(--error) 40%, transparent); }
+
+.jv-banner.xv-fault { display: flex; flex-direction: column; gap: 5px; padding: 10px 12px; border-left-width: 4px; }
+.xv-faulthead { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.xv-faulthead strong { font-size: 13px; letter-spacing: 0.01em; }
+.xv-code { padding: 1px 7px; border-radius: 5px; background: color-mix(in srgb, var(--error) 14%, transparent); font: 600 12px/18px var(--mono); }
+.xv-code.sub { font-weight: 500; }
+.xv-code.sub::before { content: "› "; opacity: 0.6; }
+.xv-reason { color: var(--text); font-size: 14px; font-weight: 550; overflow-wrap: anywhere; }
+.xv-facts { display: flex; flex-wrap: wrap; gap: 4px 18px; color: var(--text-2); font: 12px var(--mono); }
+.xv-factlabel { margin-right: 6px; color: var(--muted); font-family: var(--sans); }
+
+.xv-attrs { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 5px 12px; margin: 0; font: 12px/1.5 var(--mono); }
+.xv-attrs dt { margin: 0; white-space: nowrap; }
+.xv-attrs dd { margin: 0; color: var(--text); overflow-wrap: anywhere; }
+.jv-paths + .jv-note { margin-bottom: 6px; }
+.xv-rawpick .jv-mode { height: 22px; font-size: 12px; }
+.jv-tablewrap > pre.jv-raw { flex: 1; }
+/* Raw for a large text: a row per line (xmlviewer.ts rawLines). */
+.jv-list.xv-lines { font: 12px/20px var(--mono); padding: 0; }
+.xv-line { height: 20px; padding-right: 20px; white-space: pre; }
+.xv-ln { display: inline-block; margin-right: 14px; padding: 0 8px 0 12px; color: var(--muted); background: var(--surface-2); border-right: 1px solid var(--border); user-select: none; }
+
+/* The detail panel's line above a body that is a SOAP Fault. */
+.notice.soap-fault { margin: 0 0 6px; padding: 6px 10px; border-radius: 6px; color: var(--error); background: var(--error-soft); font-size: 12.5px; overflow-wrap: anywhere; }
 
 @media (max-width: 900px) {
   .jv-body { flex-direction: column; }

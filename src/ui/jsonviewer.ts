@@ -9,15 +9,17 @@
 // are only built when it is opened. Everything shown is captured, untrusted text and goes into
 // the DOM through textContent (`h`), never HTML.
 
-import { $, fmtBytes, h, type Child } from './dom';
+import { $, fmtBytes, h } from './dom';
 import { highlight, paint } from './highlight';
-import { completions, nestedFallback, type Suggestion } from './jsoncomplete';
+import { completions, nestedFallback } from './jsoncomplete';
 import { noteViewed, openJsonCompare } from './jsondiff';
 import {
   canTable, cellAt, cellOf, compareNodes, inlinePreview, isRecordTable, keyValueTable, describe, findTable, isContainer, jsonPath, jsPath, lossyNumber, parseJson, plural, preview,
   QueryError, runQuery, search, sizeOf, stringify, stringifyCapped, tableOf, walk,
   type JArr, type JContainer, type JNode, type Match, type ParseResult, type Seg, type Table,
 } from './jsonmodel';
+import { nestedKind } from './xmlmodel';
+import { button, copyButton, download, IS_MAC, markText, QUERY_KEY, suggestList, VList } from './viewerkit';
 
 export interface JsonSource {
   /** What it is: "Response body", "Raw event"… */
@@ -29,6 +31,13 @@ export interface JsonSource {
   fileName: string;
   /** Set when the capture cut the body off at its size limit (bytes). */
   truncated?: { captured: number; total: number } | null;
+}
+
+/** For a viewer opened on top of another screen's viewer. */
+export interface OverOptions {
+  /** What Back returns to, e.g. "Response body". */
+  backTo?: string;
+  onClose?: () => void;
 }
 
 type Mode = 'tree' | 'table' | 'raw';
@@ -91,9 +100,13 @@ const V = {
   returnFocus: null as Element | null,
   /** The hash to go back to on close, e.g. #api when opened from the API screen. */
   returnHash: '',
+  /** Set when opened on top of another viewer: what Back says, and what to do on close. */
+  over: {} as OverOptions,
 };
 
 let onToggle: (open: boolean) => void = () => undefined;
+/** Opens XML found in a string, on top of this viewer; set by whoever has the XML viewer. */
+let xmlOpener: ((src: JsonSource, opts: OverOptions) => void) | null = null;
 const doc = () => V.stack[V.stack.length - 1];
 const rootEl = () => $('json');
 
@@ -110,121 +123,9 @@ let U: {
   modes: Record<Mode, HTMLButtonElement>;
 } | null = null;
 
-// ── Virtual list ────────────────────────────────────────
-
-/** A scrolling list that only creates the rows in view. Rows have a fixed height. */
-class VList {
-  readonly el: HTMLElement;
-  private readonly spacer: HTMLElement;
-  private readonly layer: HTMLElement;
-  private count = 0;
-  private frame = 0;
-
-  constructor(cls: string, private readonly rowH: number, private readonly row: (i: number) => HTMLElement, private readonly head: HTMLElement | null = null) {
-    this.layer = h('div', { class: 'jv-layer' });
-    this.spacer = h('div', { class: 'jv-spacer' }, this.layer);
-    this.el = h('div', { class: cls, tabindex: '0' }, head, this.spacer);
-    this.el.addEventListener('scroll', () => this.schedule(), { passive: true });
-    new ResizeObserver(() => this.schedule()).observe(this.el);
-  }
-
-  setCount(n: number): void {
-    this.count = n;
-    this.spacer.style.height = `${n * this.rowH}px`;
-    this.render();
-  }
-
-  schedule(): void {
-    if (this.frame) return;
-    this.frame = requestAnimationFrame(() => {
-      this.frame = 0;
-      this.render();
-    });
-  }
-
-  render(): void {
-    // A list from a screen that was just replaced still gets resize and frame callbacks.
-    if (!this.el.isConnected) return;
-    const top = this.el.scrollTop;
-    const view = this.el.clientHeight - this.headH();
-    const first = Math.max(0, Math.floor(top / this.rowH) - 10);
-    const last = Math.min(this.count, Math.ceil((top + view) / this.rowH) + 10);
-    this.layer.style.transform = `translateY(${first * this.rowH}px)`;
-    const frag = document.createDocumentFragment();
-    for (let i = first; i < last; i++) frag.append(this.row(i));
-    this.layer.replaceChildren(frag);
-  }
-
-  /** Scrolls row `i` into view; `center` puts it mid-list when it has to scroll. */
-  reveal(i: number, center = false): void {
-    if (i < 0) return;
-    const y = i * this.rowH;
-    const view = this.el.clientHeight - this.headH();
-    const st = this.el.scrollTop;
-    if (y >= st && y + this.rowH <= st + view) return this.render();
-    if (center) this.el.scrollTop = y - (view - this.rowH) / 2;
-    else this.el.scrollTop = y < st ? y : y + this.rowH - view;
-    this.render();
-  }
-
-  pageRows(): number {
-    return Math.max(1, Math.floor((this.el.clientHeight - this.headH()) / this.rowH) - 1);
-  }
-
-  private headH(): number {
-    return this.head?.offsetHeight ?? 0;
-  }
-}
-
 // ── Small helpers ───────────────────────────────────────
 
-function button(label: Child, title: string, onclick: () => void, cls = 'btn btn-sm'): HTMLButtonElement {
-  const b = h('button', { class: cls, type: 'button', title }, label) as HTMLButtonElement;
-  b.onclick = onclick;
-  return b;
-}
-
-async function copyText(btn: HTMLElement, text: string): Promise<void> {
-  const label = btn.textContent;
-  try {
-    await navigator.clipboard.writeText(text);
-    btn.textContent = 'Copied';
-  } catch {
-    btn.textContent = 'Copy failed';
-  }
-  setTimeout(() => (btn.textContent = label), 1200);
-}
-
-function copyButton(label: string, title: string, text: () => string): HTMLButtonElement {
-  const b = button(label, title, () => void copyText(b, text()));
-  return b;
-}
-
-function download(text: string, fileName: string): void {
-  const url = URL.createObjectURL(new Blob([text], { type: 'application/json' }));
-  const a = h('a', { href: url, download: fileName });
-  document.body.append(a);
-  a.click();
-  a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 10_000);
-}
-
-/** `text` with the search term wrapped in <mark>. */
-function marked(text: string): (string | Node)[] {
-  const q = V.needle;
-  if (!q) return [text];
-  const low = text.toLowerCase();
-  // Lower-casing a few characters changes the length; then offsets would not line up.
-  if (low.length !== text.length) return [text];
-  const out: (string | Node)[] = [];
-  let from = 0;
-  for (let k = low.indexOf(q); k !== -1; k = low.indexOf(q, k + q.length)) {
-    out.push(text.slice(from, k), h('mark', { class: 'jv-mark' }, text.slice(k, k + q.length)));
-    from = k + q.length;
-  }
-  out.push(text.slice(from));
-  return out;
-}
+const marked = (text: string) => markText(text, V.needle);
 
 const childAt = (n: JContainer, k: number): JNode => (n.t === 'obj' ? n.vals[k] : n.items[k]);
 const segAt = (n: JContainer, k: number): Seg => (n.t === 'obj' ? n.keys[k] : k);
@@ -934,7 +835,25 @@ function renderSide(): void {
       meta: [d.src.title],
       text: n.v,
       fileName: d.src.fileName.replace(/\.json$/, '') + `-${(js || 'string').replace(/[^\w.-]+/g, '_')}.json`,
-    })) : null);
+    })) : null,
+    // Not from a viewer that is itself on top of another: Back has one place to return to.
+    n.t === 'str' && xmlOpener && !V.over.onClose && nestedKind(n.v) === 'xml' ? button('Open as XML', 'This string holds XML: open it in the XML viewer (Esc comes back)', () => {
+      // This screen stays as it is underneath, and comes back when the XML viewer closes.
+      rootEl().hidden = true;
+      xmlOpener?.({
+        title: `XML in ${js || 'the string'}`,
+        meta: [d.src.title],
+        text: n.v.trim(),
+        fileName: d.src.fileName.replace(/\.json$/, '') + `-${(js || 'string').replace(/[^\w.-]+/g, '_')}.xml`,
+      }, {
+        backTo: d.src.title,
+        onClose: () => {
+          if (!V.open) return;
+          rootEl().hidden = false;
+          focusMain();
+        },
+      });
+    }) : null);
 
   const notes: HTMLElement[] = [];
   if ('cut' in n && n.cut) notes.push(h('div', { class: 'jv-note warn' }, 'Incomplete: the captured text ends inside this value.'));
@@ -1036,123 +955,16 @@ function exportText(d: Doc): string {
   return d.parsed.root && !d.parsed.partial && !d.parsed.error ? stringify(d.parsed.root) : d.src.text;
 }
 
-// ── Path suggestions ────────────────────────────────────
-
 /** Closes the Path box's suggestion list; true if it was open. Set while the viewer is built. */
 let closeSuggestions: () => boolean = () => false;
-
-/** Long nested paths lose their middle, not their end: the end is the key that matched. */
-function middleEllipsis(text: string, max: number): string {
-  if (text.length <= max) return text;
-  const tail = Math.ceil((max - 1) * 0.6);
-  return `${text.slice(0, max - 1 - tail)}…${text.slice(-tail)}`;
-}
-
-const KIND_TAG: Record<Suggestion['kind'], string> = { key: '', index: '', nested: 'nested', 'any-depth': 'any depth' };
-
-/**
- * The suggestion list under the Path box: keys at the place being typed and matching keys
- * further down (jsoncomplete.ts). ↑↓ choose, Tab or Enter take one, Esc closes it. Taking one
- * applies it straight away and offers what comes next.
- */
-function suggestList(input: HTMLInputElement, root: () => JNode | null, apply: (text: string) => void) {
-  const el = h('div', { class: 'jv-suggest', role: 'listbox', id: 'jv-suggest', hidden: '' });
-  input.setAttribute('role', 'combobox');
-  input.setAttribute('aria-autocomplete', 'list');
-  input.setAttribute('aria-controls', 'jv-suggest');
-  input.setAttribute('aria-expanded', 'false');
-  let items: Suggestion[] = [];
-  let active = -1;
-  let timer = 0;
-
-  const close = (): boolean => {
-    clearTimeout(timer);
-    const was = !el.hidden;
-    el.hidden = true;
-    input.setAttribute('aria-expanded', 'false');
-    input.removeAttribute('aria-activedescendant');
-    active = -1;
-    return was;
-  };
-  const highlightActive = () => {
-    el.querySelectorAll('.jv-sug').forEach((o, i) => o.classList.toggle('active', i === active));
-    if (active >= 0) {
-      input.setAttribute('aria-activedescendant', `jv-sug-${active}`);
-      el.children[active]?.scrollIntoView({ block: 'nearest' });
-    } else input.removeAttribute('aria-activedescendant');
-  };
-  const render = () => {
-    const r = root();
-    // Only when the caret is at the end: suggestions replace the text up to the step being typed.
-    items = r && document.activeElement === input && input.selectionStart === input.value.length ? completions(r, input.value) : [];
-    active = -1;
-    if (!items.length) return void close();
-    el.replaceChildren(...items.map((s, i) => {
-      const tag = KIND_TAG[s.kind];
-      const opt = h('div', { class: `jv-sug ${s.kind}`, role: 'option', id: `jv-sug-${i}`, title: s.text },
-        h('span', { class: 'jv-sug-label' }, middleEllipsis(s.label, 56)),
-        tag ? h('span', { class: 'jv-sug-tag' }, tag) : null,
-        h('span', { class: 'jv-sug-detail' }, s.detail));
-      // mousedown, not click: the input must keep focus.
-      opt.addEventListener('mousedown', (e) => {
-        e.preventDefault();
-        take(i);
-      });
-      return opt;
-    }));
-    el.hidden = false;
-    input.setAttribute('aria-expanded', 'true');
-    highlightActive();
-  };
-  const take = (i: number) => {
-    const s = items[i];
-    if (!s) return;
-    input.value = s.text;
-    input.setSelectionRange(s.text.length, s.text.length);
-    apply(s.text);
-    render();
-  };
-
-  input.addEventListener('input', () => {
-    clearTimeout(timer);
-    timer = window.setTimeout(render, 60);
-  });
-  input.addEventListener('focus', render);
-  input.addEventListener('blur', () => close());
-  input.addEventListener('keydown', (e) => {
-    if (el.hidden) {
-      if (e.key === 'ArrowDown' || (e.key === ' ' && e.ctrlKey)) {
-        e.preventDefault();
-        render();
-      }
-      return;
-    }
-    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
-      e.preventDefault();
-      const n = items.length;
-      active = e.key === 'ArrowDown' ? (active + 1) % n : active <= 0 ? n - 1 : active - 1;
-      highlightActive();
-    } else if (e.key === 'Tab' && !e.shiftKey) {
-      e.preventDefault();
-      take(active >= 0 ? active : 0);
-    } else if (e.key === 'Enter' && active >= 0) {
-      e.preventDefault();
-      take(active);
-    }
-  });
-  closeSuggestions = close;
-  return { el, close };
-}
-
-const IS_MAC = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform);
-const QUERY_KEY = IS_MAC ? '⌘L' : 'Ctrl+L';
 
 function renderShell(): void {
   const d = doc();
   const parent = V.stack.length > 1 ? V.stack[V.stack.length - 2] : null;
   const ok = !!d.parsed.root;
 
-  const back = button(h('span', {}, '← ', parent ? `Back to ${parent.src.title.toLowerCase()}` : 'Back to timeline'), 'Back (Esc)', () => back_(), 'btn');
+  const backTo = parent ? parent.src.title : V.over.backTo;
+  const back = button(h('span', {}, '← ', backTo ? `Back to ${backTo.toLowerCase()}` : 'Back to timeline'), 'Back (Esc)', () => back_(), 'btn');
   const meta = [...d.src.meta, ok ? plural(d.parsed.nodes, 'value') : ''].filter(Boolean);
   const title = h('div', { class: 'jv-title' }, h('h1', {}, d.src.title), ...meta.map((m) => h('span', { class: 'jv-meta' }, m)));
   const copyAll = copyButton('Copy all', d.parsed.partial || d.parsed.error ? 'Copy the text as captured' : 'Copy the whole document, pretty-printed', () => exportText(d));
@@ -1179,10 +991,14 @@ function renderShell(): void {
   }) as HTMLInputElement;
   query.value = d.query;
   let qTimer = 0;
-  const suggest = suggestList(query, () => doc().parsed.root, (text) => {
+  const suggest = suggestList(query, 'jv', (text) => {
+    const r = doc().parsed.root;
+    return r ? completions(r, text) : [];
+  }, (text) => {
     clearTimeout(qTimer);
     applyQuery(text);
   });
+  closeSuggestions = suggest.close;
   query.addEventListener('input', () => {
     clearTimeout(qTimer);
     qTimer = window.setTimeout(() => applyQuery(query.value), 250);
@@ -1329,9 +1145,15 @@ export function jsonViewerOpen(): boolean {
   return V.open;
 }
 
-export function openJsonViewer(src: JsonSource): void {
+/** Connects "Open as XML" for XML found in a string; without it the button is not shown. */
+export function setJsonXmlOpener(fn: ((src: JsonSource, opts: OverOptions) => void) | null): void {
+  xmlOpener = fn;
+}
+
+export function openJsonViewer(src: JsonSource, over: OverOptions = {}): void {
   noteViewed(src);
   V.stack = [newDoc(src)];
+  V.over = over;
   if (!V.open) {
     V.open = true;
     V.returnFocus = document.activeElement;
@@ -1346,6 +1168,7 @@ export function openJsonViewer(src: JsonSource): void {
 
 export function closeJsonViewer(): void {
   if (!V.open) return;
+  const over = V.over;
   V.open = false;
   V.stack = [];
   V.rows = [];
@@ -1353,6 +1176,7 @@ export function closeJsonViewer(): void {
   V.hits = new Set();
   V.ancestors = new Set();
   V.table = null;
+  V.over = {};
   U = null;
   rootEl().hidden = true;
   rootEl().replaceChildren();
@@ -1360,6 +1184,7 @@ export function closeJsonViewer(): void {
   if (location.hash === '#json') history.replaceState(null, '', location.pathname + location.search + V.returnHash);
   onToggle(false);
   if (V.returnFocus instanceof HTMLElement && V.returnFocus.isConnected) V.returnFocus.focus({ preventScroll: true });
+  over.onClose?.();
 }
 
 export function initJsonViewer(opts: { onToggle: (open: boolean) => void }): void {
@@ -1373,7 +1198,8 @@ export function initJsonViewer(opts: { onToggle: (open: boolean) => void }): voi
   });
 
   document.addEventListener('keydown', (e) => {
-    if (!V.open || document.querySelector('dialog[open]')) return;
+    // Hidden while the XML viewer, opened from a string in here, is on top with its own keys.
+    if (!V.open || rootEl().hidden || document.querySelector('dialog[open]')) return;
     const t = e.target as HTMLElement;
     const typing = t.matches('input, textarea, select');
     if (e.key === 'Escape') {

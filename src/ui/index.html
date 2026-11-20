@@ -105,6 +105,7 @@
   <div id="settings" class="settings" hidden></div>
   <div id="tomcat" class="tomcat" hidden></div>
   <div id="json" class="jsonv" hidden></div>
+  <div id="xml" class="jsonv xmlv" hidden></div>
   <div id="api" class="apiscreen" hidden></div>
   <div id="metrics" class="metrics" hidden></div>
 
@@ -129,7 +130,7 @@
       <dt><kbd>F</kbd></dt><dd>Follow newest events</dd>
       <dt><kbd>O</kbd> or click Time</dt><dd>Newest or oldest first</dd>
       <dt><kbd>R</kbd></dt><dd>Reset filters</dd>
-      <dt><kbd>V</kbd></dt><dd>Open the event's JSON in the JSON viewer</dd>
+      <dt><kbd>V</kbd></dt><dd>Open the event's JSON or XML in its viewer</dd>
       <dt><kbd>G</kbd></dt><dd>Go to source: open the log entry's code in your editor</dd>
       <dt><kbd>S</kbd></dt><dd>Metrics: endpoints, latency, errors (S or Esc to close)</dd>
       <dt><kbd>Ctrl</kbd> <kbd>F</kbd></dt><dd>Find in this event (⌘F on a Mac)</dd>
@@ -137,10 +138,10 @@
       <dt><kbd>Esc</kbd></dt><dd>Clear find, or close the panel</dd>
       <dt>Shift-click a filter</dt><dd>Show only that one</dd>
     </dl>
-    <h3 class="keys-head">JSON viewer</h3>
+    <h3 class="keys-head">JSON and XML viewers</h3>
     <dl class="keys">
-      <dt><kbd>Ctrl</kbd> <kbd>L</kbd> or <kbd>P</kbd></dt><dd>Path query (⌘L on a Mac)</dd>
-      <dt><kbd>Ctrl</kbd> <kbd>F</kbd> or <kbd>/</kbd></dt><dd>Find in keys and values</dd>
+      <dt><kbd>Ctrl</kbd> <kbd>L</kbd> or <kbd>P</kbd></dt><dd>Path or XPath query (⌘L on a Mac)</dd>
+      <dt><kbd>Ctrl</kbd> <kbd>F</kbd> or <kbd>/</kbd></dt><dd>Find in keys and values, or in names, attributes and text</dd>
       <dt><kbd>N</kbd> <kbd>Shift</kbd> <kbd>N</kbd></dt><dd>Next / previous match</dd>
       <dt><kbd>Esc</kbd></dt><dd>Leave the field, or go back</dd>
       <dt>Compare…</dt><dd>Two documents side by side; <kbd>N</kbd> / <kbd>P</kbd> next / previous difference</dd>

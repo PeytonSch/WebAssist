@@ -4,19 +4,21 @@ import { connectLive } from './live';
 import { correlate, type CorrItem, type Correlation } from '../shared/correlate';
 import { RouteMatcher, serverPath, type Route, type RouteTemplate } from '../shared/route';
 import type { HubEvent, HubStatus, Level, ServerMessage, SessionInfo } from '../shared/types';
-import { apiOpen, closeApi, editEventInApi, initApi, openApi, replayEvent, saveEventToCatalog, setJsonViewerOpener } from './api';
+import { apiOpen, closeApi, editEventInApi, initApi, openApi, replayEvent, saveEventToCatalog, setJsonViewerOpener, setXmlViewerOpener } from './api';
 import { CHROME_LAUNCH_EVENT, chromeButton, chromeLaunching, chromeLaunchNote, startChrome } from './chrome';
 import { $, fmtBytes, h, type Child } from './dom';
 import { createFinder } from './find';
 import { bodyLang, highlight, paint, type Lang, type Token } from './highlight';
 import { findJsonIn } from './jsonmodel';
-import { closeJsonViewer, initJsonViewer, jsonViewerOpen, openJsonViewer, type JsonSource } from './jsonviewer';
+import { closeJsonViewer, initJsonViewer, jsonViewerOpen, openJsonViewer, setJsonXmlOpener, type JsonSource } from './jsonviewer';
 import { closeMetrics, initMetrics, metricsChanged, metricsOpen, openMetrics } from './metrics';
 import { onRegistryMessage } from './registry';
 import { initSettings, openSettings, settingsOpen, updateSettingsStatus } from './settings';
 import { firstOwnRef, initSource, linkSources, openSource, setSourceContext, showError } from './source';
 import { highlightOf, onHighlightsChange, openHighlightPicker } from './routehl';
 import { openJsonCompare, setCompareCandidates, type CompareCandidate } from './jsondiff';
+import { faultSummary, findXmlIn, isXmlBody, parseXml, serializeDocument, soapInfo, type SoapFault } from './xmlmodel';
+import { closeXmlViewer, initXmlViewer, openXmlViewer, setXmlJsonOpener, xmlViewerOpen, type XmlSource } from './xmlviewer';
 import { durationOf, failedOf, groupOf, isSender, isStatic, levelOf, RANK, resOf, ridOf, routeWith, statusOf, typeOf, webappOf, type Group, type Row } from './rows';
 import { initTitlebar } from './titlebar';
 import { closeTomcat, initTomcat, onWarNotice, openTomcat, syncWarNotices, tomcatOpen } from './tomcat';
@@ -757,22 +759,49 @@ function prettyBody(body: string, mime?: string | null): string {
   return body;
 }
 
-// ── JSON viewer sources ─────────────────────────────────
+/** Past this size an XML body is shown as captured: reading it is left to the XML viewer. */
+const XML_PEEK_MAX = 2_000_000;
 
-/** Opens the full-window JSON viewer, which hides the panel; not over Settings or Tomcat. */
-function viewJson(src: JsonSource | null): void {
-  if (src && !settingsOpen() && !tomcatOpen()) openJsonViewer(src);
+/**
+ * What the detail panel shows of an XML body: the text pretty-printed (SOAP usually arrives on
+ * one line), and the SOAP Fault it carries, if any. A body that is cut off or not well-formed
+ * is shown as captured.
+ */
+function peekXml(body: string): { text: string; fault: SoapFault | null } {
+  if (body.length > XML_PEEK_MAX) return { text: body, fault: null };
+  const p = parseXml(body);
+  const whole = p.root && !p.error && !p.partial && !p.doctype;
+  return { text: whole ? serializeDocument(p).replace(/\n$/, '') : body, fault: soapInfo(p.root)?.fault ?? null };
 }
 
-/** "JSON viewer" button for a section head: placed before its Copy button. */
-function withJsonButton(sec: HTMLElement, src: JsonSource | null, where: Element | null = sec.querySelector('.sec-head')): HTMLElement {
-  if (!src || !where) return sec;
-  const btn = h('button', { class: 'btn copy jv-open', type: 'button', title: 'Explore this JSON full-window: tree, table, search and paths (V)' }, 'JSON viewer');
+// ── JSON and XML viewer sources ─────────────────────────
+
+/** What a viewer button opens: a JSON or an XML document. */
+type ViewerDoc = { kind: 'json'; src: JsonSource } | { kind: 'xml'; src: XmlSource };
+const jsonDoc = (src: JsonSource | null): ViewerDoc | null => (src ? { kind: 'json', src } : null);
+const xmlDoc = (src: XmlSource | null): ViewerDoc | null => (src ? { kind: 'xml', src } : null);
+const jsonOf = (doc: ViewerDoc | null): JsonSource | null => (doc?.kind === 'json' ? doc.src : null);
+const KIND = { json: 'JSON', xml: 'XML' } as const;
+
+/** Opens the document in its full-window viewer; not over Settings or Tomcat. */
+function viewDoc(doc: ViewerDoc | null): void {
+  if (!doc || settingsOpen() || tomcatOpen()) return;
+  if (doc.kind === 'json') openJsonViewer(doc.src);
+  else openXmlViewer(doc.src);
+}
+
+/** "JSON viewer" or "XML viewer" button for a section head: placed before its Copy button. */
+function withViewerButton(sec: HTMLElement, doc: ViewerDoc | null, where: Element | null = sec.querySelector('.sec-head')): HTMLElement {
+  if (!doc || !where) return sec;
+  const title = doc.kind === 'json'
+    ? 'Explore this JSON full-window: tree, table, search and paths (V)'
+    : 'Explore this XML full-window: tree, table, search and XPath, with the SOAP operation and faults (V)';
+  const btn = h('button', { class: 'btn copy jv-open', type: 'button', title }, `${KIND[doc.kind]} viewer`);
   btn.onclick = (e) => {
     // Inside the raw event's <summary>, a click would also fold the section.
     e.preventDefault();
     e.stopPropagation();
-    viewJson(src);
+    viewDoc(doc);
   };
   where.insertBefore(btn, where.querySelector(':scope > .copy'));
   return sec;
@@ -805,6 +834,43 @@ function bodySource(row: Row, which: 'response' | 'request'): JsonSource | null 
     fileName: `${name}-${which}.json`,
     truncated: d.bodyTruncated ? { captured: new Blob([d.body]).size, total: d.bodyBytes } : null,
   };
+}
+
+/** A header's value, whatever the case of its name. */
+function headerOf(headers: Record<string, string> | undefined, name: string): string | undefined {
+  for (const [k, v] of Object.entries(headers ?? {})) if (k.toLowerCase() === name) return v;
+  return undefined;
+}
+
+/** The response or request body of a browser request, when it is XML (a SOAP message, usually). */
+function xmlBodySource(row: Row, which: 'response' | 'request'): XmlSource | null {
+  if (groupOf(row) !== 'network' || !isSender(row.ev.source)) return null;
+  const req = row.ev.kind === 'request' ? row.ev.data : {};
+  const d: Record<string, any> = which === 'response' ? resOf(row)?.data ?? {} : req;
+  if (typeof d.body !== 'string' || d.body.trim() === '') return null;
+  const mime: string | undefined = which === 'response' ? d.mimeType : headerOf(d.headers, 'content-type');
+  let text: string = d.body;
+  if (!isXmlBody(text, mime)) {
+    // SOAP with attachments (MTOM): the envelope is a part of a multipart body.
+    const part = /multipart\//i.test(mime ?? '') || /^\s*--/.test(text.slice(0, 200)) ? findXmlIn(text) : null;
+    if (!part) return null;
+    text = part.text;
+  }
+  const status = which === 'response' ? statusOf(row) : null;
+  const name = (shortUrl(row.ev.data.url).split('?')[0].split('/').filter(Boolean).pop() ?? 'body').replace(/[^\w.-]+/g, '_');
+  const whole = text === d.body;
+  return {
+    title: `${which === 'response' ? 'Response body' : 'Request body'}${whole ? '' : ', XML part'}`,
+    meta: [`${row.ev.data.method ?? ''} ${shortUrl(row.ev.data.url)}`.trim(), status != null ? String(status) : '', fmtBytes(whole ? d.bodyBytes ?? text.length : text.length)].filter(Boolean),
+    text,
+    fileName: `${name}-${which}.xml`,
+    truncated: whole && d.bodyTruncated ? { captured: new Blob([text]).size, total: d.bodyBytes } : null,
+  };
+}
+
+/** A request's body for its viewer: JSON, else XML. */
+function bodyDoc(row: Row, which: 'response' | 'request'): ViewerDoc | null {
+  return jsonDoc(bodySource(row, which)) ?? xmlDoc(xmlBodySource(row, which));
 }
 
 /**
@@ -848,6 +914,24 @@ function messageSource(row: Row): JsonSource | null {
   };
 }
 
+/** An XML document inside a console or log message (a logged SOAP payload), if there is one. */
+function xmlMessageSource(row: Row): XmlSource | null {
+  const text = messageText(row);
+  const found = text && text.includes('<') ? findXmlIn(text) : null;
+  if (!found) return null;
+  return {
+    title: groupOf(row) === 'console' ? 'Console message' : 'Log message',
+    meta: [row.ev.summary.slice(0, 120)],
+    text: found.text,
+    fileName: `${groupOf(row)}-message.xml`,
+  };
+}
+
+/** What a message holds for a viewer: a JSON object, else an XML document. */
+function messageDoc(row: Row): ViewerDoc | null {
+  return jsonDoc(messageSource(row)) ?? xmlDoc(xmlMessageSource(row));
+}
+
 function rawSource(row: Row): JsonSource {
   const res = resOf(row);
   return {
@@ -858,20 +942,25 @@ function rawSource(row: Row): JsonSource {
   };
 }
 
-/** What V opens: a JSON body, else JSON in the message, else the raw event. */
-function jsonForSelected(): JsonSource | null {
+/** What V opens: a JSON or XML body, else JSON or XML in the message, else the raw event. */
+function docForSelected(): ViewerDoc | null {
   const row = state.selected;
   if (!row) return null;
-  return bodySource(row, 'response') ?? bodySource(row, 'request') ?? messageSource(row) ?? rawSource(row);
+  return bodyDoc(row, 'response') ?? bodyDoc(row, 'request') ?? messageDoc(row) ?? jsonDoc(rawSource(row));
 }
 
-function bodySection(title: string, d: Record<string, any>, mime?: string | null, json: JsonSource | null = null): HTMLElement | null {
+function bodySection(title: string, d: Record<string, any>, mime?: string | null, doc: ViewerDoc | null = null): HTMLElement | null {
   if (typeof d.body !== 'string') {
     return d.bodyUnavailable ? section(title, h('div', { class: 'rel-empty' }, 'Chrome had already discarded this body.')) : null;
   }
   if (d.body === '') return section(title, h('div', { class: 'rel-empty' }, 'Empty body.'));
-  const text = prettyBody(d.body, mime);
-  const el = withJsonButton(section(title, code(text, bodyLang(text, mime)), { note: fmtBytes(d.bodyBytes), copy: text }), json);
+  const xml = doc?.kind === 'xml' ? peekXml(doc.src.text) : null;
+  // The XML part of a multipart body opens in the viewer; here the body is shown as it came.
+  const whole = !!xml && doc!.src.text === d.body;
+  const text = whole ? xml!.text : prettyBody(d.body, mime);
+  const el = withViewerButton(section(title, code(text, whole ? 'xml' : bodyLang(text, mime)), { note: fmtBytes(d.bodyBytes), copy: text }), doc);
+  // A SOAP Fault often comes back as 200 or a bare 500: say what it is before the XML.
+  if (xml?.fault) el.insertBefore(h('div', { class: 'notice soap-fault' }, h('strong', {}, 'SOAP Fault '), faultSummary(xml.fault)), el.children[1] ?? null);
   if (d.bodyTruncated) {
     el.append(h('div', { class: 'notice' }, `Truncated: showing the first ${fmtBytes(new Blob([d.body]).size)} of ${fmtBytes(d.bodyBytes)}.`));
   }
@@ -880,15 +969,15 @@ function bodySection(title: string, d: Record<string, any>, mime?: string | null
 
 /**
  * Buttons under a request's title, above the find bar: its response body (and request body) in
- * the JSON viewer, without scrolling down to the body first. A body that is not JSON gets a
- * button that scrolls to it instead.
+ * the JSON or XML viewer, without scrolling down to the body first. A body that is neither gets
+ * a button that scrolls to it instead.
  */
-function quickBodies(resJson: JsonSource | null, reqJson: JsonSource | null, resSec: HTMLElement | null, reqSec: HTMLElement | null): HTMLElement | null {
+function quickBodies(res: ViewerDoc | null, req: ViewerDoc | null, resSec: HTMLElement | null, reqSec: HTMLElement | null): HTMLElement | null {
   const buttons: HTMLElement[] = [];
-  const jsonButton = (label: string, src: JsonSource, primary: boolean) => {
-    const b = h('button', { type: 'button', class: `btn btn-sm${primary ? ' btn-primary' : ''}`, title: `Open the ${label.toLowerCase()} in the JSON viewer${primary ? ' (V)' : ''}` },
-      jsonIcon(), `${label} in JSON viewer`);
-    b.onclick = () => viewJson(src);
+  const viewerButton = (label: string, doc: ViewerDoc, primary: boolean) => {
+    const b = h('button', { type: 'button', class: `btn btn-sm${primary ? ' btn-primary' : ''}`, title: `Open the ${label.toLowerCase()} in the ${KIND[doc.kind]} viewer${primary ? ' (V)' : ''}` },
+      doc.kind === 'json' ? jsonIcon() : xmlIcon(), `${label} in ${KIND[doc.kind]} viewer`);
+    b.onclick = () => viewDoc(doc);
     return b;
   };
   const jumpButton = (label: string, sec: HTMLElement) => {
@@ -901,9 +990,10 @@ function quickBodies(resJson: JsonSource | null, reqJson: JsonSource | null, res
     };
     return b;
   };
-  if (resJson) buttons.push(jsonButton('Response body', resJson, true));
+  if (res) buttons.push(viewerButton('Response body', res, true));
   else if (resSec) buttons.push(jumpButton('Response body', resSec));
-  if (reqJson) buttons.push(jsonButton('Request body', reqJson, !resJson));
+  if (req) buttons.push(viewerButton('Request body', req, !res));
+  const resJson = jsonOf(res);
   if (resJson) {
     const cmp = h('button', { type: 'button', class: 'btn btn-sm btn-ghost', title: 'Compare this response body with another, side by side' }, 'Compare…');
     cmp.onclick = () => openJsonCompare({ left: resJson });
@@ -912,8 +1002,17 @@ function quickBodies(resJson: JsonSource | null, reqJson: JsonSource | null, res
   return buttons.length ? h('div', { class: 'd-quick' }, ...buttons) : null;
 }
 
+/** Angle brackets, for the XML viewer buttons. */
+function xmlIcon(): Node {
+  return strokeIcon('M5.5 4 2 8l3.5 4M10.5 4 14 8l-3.5 4');
+}
+
 /** Curly braces, for the JSON viewer buttons. */
 function jsonIcon(): Node {
+  return strokeIcon('M5.5 2.5C4 2.5 4 3.5 4 5s-.5 2.5-1.5 3c1 .5 1.5 1.5 1.5 3s0 2.5 1.5 2.5M10.5 2.5C12 2.5 12 3.5 12 5s.5 2.5 1.5 3c-1 .5-1.5 1.5-1.5 3s0 2.5-1.5 2.5');
+}
+
+function strokeIcon(path: string): Node {
   const ns = 'http://www.w3.org/2000/svg';
   const svg = document.createElementNS(ns, 'svg');
   svg.setAttribute('viewBox', '0 0 16 16');
@@ -921,7 +1020,7 @@ function jsonIcon(): Node {
   svg.setAttribute('height', '13');
   svg.setAttribute('aria-hidden', 'true');
   const p = document.createElementNS(ns, 'path');
-  p.setAttribute('d', 'M5.5 2.5C4 2.5 4 3.5 4 5s-.5 2.5-1.5 3c1 .5 1.5 1.5 1.5 3s0 2.5 1.5 2.5M10.5 2.5C12 2.5 12 3.5 12 5s.5 2.5 1.5 3c-1 .5-1.5 1.5-1.5 3s0 2.5-1.5 2.5');
+  p.setAttribute('d', path);
   p.setAttribute('fill', 'none');
   p.setAttribute('stroke', 'currentColor');
   p.setAttribute('stroke-width', '1.5');
@@ -1087,23 +1186,23 @@ function renderDetail(): void {
 
   let quick: HTMLElement | null = null;
   if (g === 'network' && isSender(row.ev.source)) {
-    const resJson = bodySource(row, 'response');
-    const reqJson = bodySource(row, 'request');
-    const resSec = bodySection('Response body', rd, rd.mimeType, resJson);
-    const reqSec = bodySection('Request body', row.ev.kind === 'request' ? d : {}, undefined, reqJson);
+    const resDoc = bodyDoc(row, 'response');
+    const reqDoc = bodyDoc(row, 'request');
+    const resSec = bodySection('Response body', rd, rd.mimeType, resDoc);
+    const reqSec = bodySection('Request body', row.ev.kind === 'request' ? d : {}, undefined, reqDoc);
     add(resSec);
     add(reqSec);
-    quick = quickBodies(resJson, reqJson, resSec, reqSec);
+    quick = quickBodies(resDoc, reqDoc, resSec, reqSec);
     add(headersSection('Response headers', rd.headers));
     add(headersSection('Request headers', row.ev.kind === 'request' ? d.headers : undefined));
   } else if (g === 'console') {
     const text = d.stack && !String(d.text).includes('\n    at ') ? `${d.text}\n${d.stack}` : d.text;
-    add(withJsonButton(section('Message', code(text ?? '', 'log'), { copy: text ?? '' }), messageSource(row)));
+    add(withViewerButton(section('Message', code(text ?? '', 'log'), { copy: text ?? '' }), messageDoc(row)));
   } else if (g === 'log') {
-    add(withJsonButton(section(d.stackFrames ? 'Stack trace' : 'Message', code(d.message ?? '', 'log'), {
+    add(withViewerButton(section(d.stackFrames ? 'Stack trace' : 'Message', code(d.message ?? '', 'log'), {
       note: d.lines > 1 ? `${d.lines} lines` : undefined,
       copy: d.message ?? '',
-    }), messageSource(row)));
+    }), messageDoc(row)));
   } else if (g === 'query') {
     if (d.statement) add(section('Statement', code(d.statement, 'sql'), { copy: d.statement }));
     if (d.plan) {
@@ -1117,7 +1216,7 @@ function renderDetail(): void {
   }
 
   const raw = h('details', { class: 'raw' }, h('summary', {}, 'Raw event'));
-  withJsonButton(raw, rawSource(row), raw.firstElementChild);
+  withViewerButton(raw, jsonDoc(rawSource(row)), raw.firstElementChild);
   fillRaw = () => {
     if (raw.childElementCount === 1) raw.append(code(JSON.stringify(res && res !== row.ev ? [row.ev, res] : row.ev, null, 2), 'json'));
   };
@@ -1553,6 +1652,7 @@ function init(): void {
       if (open) {
         closeTomcat();
         closeJsonViewer();
+        closeXmlViewer();
         closeApi();
         closeMetrics();
       } else void loadRouteTemplates();
@@ -1565,6 +1665,7 @@ function init(): void {
       if (open) {
         closeApi();
         closeJsonViewer();
+        closeXmlViewer();
         closeMetrics();
       }
       renderList();
@@ -1576,12 +1677,22 @@ function init(): void {
       renderList();
     },
   });
+  initXmlViewer({
+    onToggle: (open) => {
+      if (open) closeMetrics();
+      renderList();
+    },
+  });
+  // JSON inside an XML text, and XML inside a JSON string, open in the other viewer on top.
+  setXmlJsonOpener((src, over) => openJsonViewer(src, over));
+  setJsonXmlOpener((src, over) => openXmlViewer(src, over));
   initSource();
   $('btn-tomcat').onclick = () => openTomcat();
   initApi({
     onToggle: (open) => {
       if (open) {
         closeJsonViewer();
+        closeXmlViewer();
         closeMetrics();
       } else void loadRouteTemplates();
       renderList();
@@ -1592,6 +1703,9 @@ function init(): void {
   setJsonViewerOpener((text, { title }) =>
     openJsonViewer({ title: 'Response body', meta: [title], text, fileName: 'response.json' }),
   );
+  setXmlViewerOpener((text, { title }) =>
+    openXmlViewer({ title: 'Response body', meta: [title], text, fileName: 'response.xml' }),
+  );
   $('btn-api').onclick = () => openApi();
   initMetrics({
     onToggle: (open) => {
@@ -1599,6 +1713,7 @@ function init(): void {
         closeTomcat();
         closeApi();
         closeJsonViewer();
+        closeXmlViewer();
       }
       renderList();
     },
@@ -1611,8 +1726,8 @@ function init(): void {
   $('btn-metrics').onclick = () => openMetrics();
 
   document.addEventListener('keydown', (e) => {
-    // The settings, Tomcat, API, JSON viewer and metrics screens have their own keys.
-    if (settingsOpen() || tomcatOpen() || apiOpen() || jsonViewerOpen() || metricsOpen()) return;
+    // The settings, Tomcat, API, JSON and XML viewer and metrics screens have their own keys.
+    if (settingsOpen() || tomcatOpen() || apiOpen() || jsonViewerOpen() || xmlViewerOpen() || metricsOpen()) return;
     if (finder.handleKey(e)) return;
     const target = e.target as HTMLElement;
     const typing = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT';
@@ -1638,7 +1753,7 @@ function init(): void {
         break;
       }
       case 'r': case 'R': setFilters({ ...DEFAULT_FILTERS }); break;
-      case 'v': case 'V': viewJson(jsonForSelected()); break;
+      case 'v': case 'V': viewDoc(docForSelected()); break;
       case 'g': case 'G': void goToSource(); break;
       case 's': case 'S': e.preventDefault(); openMetrics(); break;
       case '?': help.showModal(); break;

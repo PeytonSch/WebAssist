@@ -32,6 +32,11 @@ summarised in each cell.
 
 ![The JSON viewer's table of orders, with nested tags, addresses and items shown in their cells](docs/images/json-viewer.png)
 
+**XML viewer, for SOAP.** XML bodies open the same way: a tree of elements with their
+attributes and text, a table for repeated elements, and the indented text. A SOAP message opens
+at the Body's payload with the operation named in the header, a Fault's code and reason are
+shown on top, and an XPath box finds things without registering namespaces (`//Item[Price > 10]`).
+
 **API client.** Load your OpenAPI or Swagger spec and call any endpoint: parameters and an
 example body come from the spec, requests are sent by the hub (no CORS), and each one lands on
 the timeline with the server events it caused. Save requests in a catalog with `{{variables}}`,
@@ -174,12 +179,14 @@ opens the menu, and the top bar drags the window (double-click to maximize).
   are tinted in it with a bar at the edge, so they stand out as they come in. The picker also
   lists the other highlighted routes, to remove them. Highlights are kept in this browser.
 - A request's details start with **Response body in JSON viewer** (and **Request body**, when
-  that is JSON), above Find in event, so a body opens without scrolling down to it; a body that
-  is not JSON gets a button that scrolls to it. **Compare…** puts the response body in the JSON
-  compare view.
+  that is JSON), above Find in event, so a body opens without scrolling down to it; an XML body
+  gets **Response body in XML viewer** instead, and any other body a button that scrolls to it.
+  **Compare…** puts a JSON response body in the JSON compare view.
+- An XML body is shown indented in the details (SOAP usually arrives on one line), and a body
+  that is a SOAP Fault has its code and reason above it.
 - The session menu switches between the live session and saved ones.
 - Shortcuts: `/` search, `M` marker, `J`/`K` or arrows to move, `E` errors only, `F` follow,
-  `O` newest/oldest first, `R` reset filters, `Ctrl+F` find in the selected event, `V` JSON
+  `O` newest/oldest first, `R` reset filters, `Ctrl+F` find in the selected event, `V` JSON or XML
   viewer, `G` go to source, `S` metrics, `Esc` close, `?` help.
 
 ## Metrics
@@ -309,6 +316,58 @@ shows it. Array items are matched up, so one inserted at the front is one additi
 (or the arrows) step through the differences. A side that is not valid JSON is compared as
 text.
 
+## XML viewer
+
+XML response and request bodies (by content type, or text that starts with `<?xml` or a tag),
+and console or log messages that contain an XML document such as a logged SOAP payload, get an
+**XML viewer** button in the detail panel (or press `V`). It works like the JSON viewer: it
+opens full-window over the timeline, and `Esc` or **Back** returns to the same event. For a
+multipart SOAP message (MTOM) it opens the XML part.
+
+- **SOAP.** A SOAP 1.1 or 1.2 envelope is recognised by its namespace. The viewer opens at the
+  Body's payload with the Header closed, the header line names the SOAP version and the
+  operation (the Body's first element), and **Header** / **Body** jump to those parts. A
+  **Fault** is shown on top in red with its code and reason (`faultcode` and `faultstring`, or
+  `Code`, subcodes and `Reason` in 1.2), the actor or role, and **Show detail** to go to its
+  detail element.
+- **Tree**: each element on one line with its attributes, and its text when that is all it
+  holds; CDATA, comments and text beside elements are marked. Open and close with the mouse or
+  the arrow keys (`*` opens everything below), or open 1, 2, 3 or all levels at once. Only the
+  rows on screen are drawn, so multi-MB bodies stay quick.
+- **Namespaces** do not get in the way: prefixes are dimmed, `xmlns` declarations are a small
+  marker on the row instead of attributes, and the namespace of a name is in its tooltip. The
+  side panel shows the selected element's namespace and what it declares.
+- **Selected node**: its XPath, e.g. `/soap:Envelope/soap:Body/m:Order/m:Item[2]/@id`, and the
+  same path matched by local name (`*[local-name()='Item'][2]`) for tools where the prefixes
+  are not registered, each with Copy; Copy XML, Copy text, its attributes and its XML.
+- **Find** searches element names, attribute names and values, text and comments; `Enter` /
+  `Shift+Enter` step through the matches, and "Only matching" hides the branches without one.
+- **XPath** shows part of the document, with a subset of XPath 1.0: `/a/b`, `//name` at any
+  depth, `*`, `@attr`, `text()`, `..`, positions `[2]` and `[last()]`, and filters such as
+  `//Item[@id='7']`, `//Item[Price > 10 and Status = 'OPEN']`, `[contains(Name, 'bolt')]`,
+  `[not(Note)]`, with `starts-with()`, `ends-with()`, `count()`, `local-name()`, `name()`,
+  `namespace-uri()`, `normalize-space()`, `string-length()` and `position()`. A name without a
+  prefix matches in any namespace (`//Body` finds `soap:Body`), and a prefix is the one written
+  in the document. Axes (`ancestor::`…), unions and arithmetic are not supported. As you type it
+  suggests the elements and attributes at that point, and names from anywhere in the document
+  as `//name`; a path that finds nothing from the top is looked for at any depth, and the
+  status says so. `Ctrl+L` (`Cmd+L` on a Mac) or `P` puts the caret in XPath.
+- **Table** shows elements that repeat (the selected element's, the XPath results, or the first
+  list in the body): a column per attribute and per child element. Click a header to sort,
+  double-click a row to open it.
+- **Raw** is the indented text, or the text as captured; Copy all and Download give the same.
+  Elements that hold text are kept on one line, so no text changes.
+- **XML or JSON inside a text**: SOAP often carries an escaped document in a string element
+  (`&lt;order&gt;…`). Such a text is marked **XML ↗** or **JSON ↗**; a click (or **Open as XML**
+  / **Open as JSON**) opens it in its own view, JSON in the JSON viewer, and `Esc` comes back.
+  The JSON viewer does the same for a string that holds XML.
+
+A body cut off at the body size limit still gives a tree: the viewer says so and marks the
+elements that never closed. XML that is not well-formed is shown as captured with the message,
+line and column, and the position marked. The content is never trusted: the viewer has its own
+small parser, a DOCTYPE is skipped without reading it, nothing external is ever loaded, and
+entities other than the built-in ones are shown as written.
+
 ## API client
 
 The **API** button in the top bar (or `#api`) opens a screen for calling your REST endpoints
@@ -367,7 +426,8 @@ directly, and seeing what each call did on the server.
   not report cookies with the request, so a cookie-based session has to be given as a
   `Cookie` header.
 - **JSON viewer.** **Open in JSON viewer** opens a JSON response in the full JSON viewer; `Esc`
-  comes back to the API screen.
+  comes back to the API screen. An XML response is shown indented and gets **Open in XML
+  viewer**, so a SOAP call can be sent from here and its Fault read at a glance.
 
 **Plain text:** default headers (`debug-hub.config.json`) and saved requests and variables
 (`api-requests.json`) are stored unencrypted. Keep real credentials out of files you share.
