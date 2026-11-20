@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
-  canTable, cellOf, cellText, describe as describeNode, elements, faultSummary, findTable, findXmlIn, isLeaf, isXmlBody, namespacesInScope, nestedKind, nsDecls, parseXml,
-  plainAttrs, prettyXml, preview, search, serialize, serializeCapped, serializeDocument, soapInfo, SOAP_11, SOAP_12, tableOf, textOf, xpathOf, type XEl, type XNode, type XText,
+  canFormat, canTable, cellOf, cellText, describe as describeNode, elements, faultSummary, findTable, findXmlIn, isLeaf, isXmlBody, namespacesInScope, nestedKind, nsDecls, parseXml,
+  FORMAT_MAX_DEPTH, plainAttrs, prettyXml, preview, search, serialize, serializeCapped, serializeDocument, soapInfo, SOAP_11, SOAP_12, tableOf, textOf, xpathOf, type XEl, type XNode, type XText,
 } from '../src/ui/xmlmodel';
 import { completions, nestedFallback, QueryError, runXPath, splitXPath } from '../src/ui/xmlquery';
 
@@ -647,5 +647,37 @@ describe('describing and tables', () => {
     const rows = tableOf(runXPath(d, '//rows')[0] as XEl)!;
     expect(cellText(cellOf(rows.rows[0], 'who'))).toBe('<first, last>');
     expect(tableOf(runXPath(d, '//tags')[0] as XEl, 0)).toMatchObject({ columns: [], hiddenColumns: 1 });
+  });
+});
+
+describe('documents nested absurdly deep', () => {
+  // The parser takes them without recursion; nothing after it may recurse either, or a hostile
+  // body overflows the stack in the detail panel and the viewer.
+  const deep = (n: number) => '<a>'.repeat(n) + '<b x="1">t</b>' + '</a>'.repeat(n);
+
+  it('says how deep a document goes', () => {
+    expect(parseXml('<a/>').depth).toBe(1);
+    expect(parseXml('<a><b><c/></b><d/></a>').depth).toBe(3);
+    expect(parseXml('<a><b><c>').depth).toBe(3);
+  });
+
+  it('is shown as captured rather than indented, and still searched and written', () => {
+    const text = deep(100_000);
+    const p = parseXml(text);
+    expect(p.depth).toBe(100_001);
+    expect(canFormat(p)).toBe(false);
+    expect(prettyXml(text)).toBeNull();
+    expect(search([p.root!], 'x').total).toBe(1);
+    expect(search([p.root!], 'x').matches[0].ancestors).toHaveLength(100_000);
+    // Written all the same (Copy XML), with indentation that stops growing.
+    const out = serialize(p.root!);
+    expect(out.split('\n')).toHaveLength(200_001);
+    expect(out.split('\n').reduce((most, l) => Math.max(most, l.length - l.trimStart().length), 0)).toBe(FORMAT_MAX_DEPTH * 2);
+  });
+
+  it('formats the depth real payloads have', () => {
+    const p = parseXml(deep(FORMAT_MAX_DEPTH - 1));
+    expect(canFormat(p)).toBe(true);
+    expect(prettyXml(deep(3))).toBe('<a>\n  <a>\n    <a>\n      <b x="1">t</b>\n    </a>\n  </a>\n</a>');
   });
 });

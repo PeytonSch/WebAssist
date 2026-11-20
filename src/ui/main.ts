@@ -17,7 +17,7 @@ import { initSettings, openSettings, settingsOpen, updateSettingsStatus } from '
 import { firstOwnRef, initSource, linkSources, openSource, setSourceContext, showError } from './source';
 import { highlightOf, onHighlightsChange, openHighlightPicker } from './routehl';
 import { openJsonCompare, setCompareCandidates, type CompareCandidate } from './jsondiff';
-import { faultSummary, findXmlIn, isXmlBody, parseXml, serializeDocument, soapInfo, type SoapFault } from './xmlmodel';
+import { canFormat, faultSummary, findXmlIn, isXmlBody, parseXml, serializeDocument, soapInfo, type SoapFault } from './xmlmodel';
 import { closeXmlViewer, initXmlViewer, openXmlViewer, setXmlJsonOpener, xmlViewerOpen, type XmlSource } from './xmlviewer';
 import { durationOf, failedOf, groupOf, isSender, isStatic, levelOf, RANK, resOf, ridOf, routeWith, statusOf, typeOf, webappOf, type Group, type Row } from './rows';
 import { initTitlebar } from './titlebar';
@@ -764,14 +764,13 @@ const XML_PEEK_MAX = 2_000_000;
 
 /**
  * What the detail panel shows of an XML body: the text pretty-printed (SOAP usually arrives on
- * one line), and the SOAP Fault it carries, if any. A body that is cut off or not well-formed
- * is shown as captured.
+ * one line), and the SOAP Fault it carries, if any. A body that is cut off, not well-formed or
+ * nested absurdly deep is shown as captured.
  */
 function peekXml(body: string): { text: string; fault: SoapFault | null } {
   if (body.length > XML_PEEK_MAX) return { text: body, fault: null };
   const p = parseXml(body);
-  const whole = p.root && !p.error && !p.partial && !p.doctype;
-  return { text: whole ? serializeDocument(p).replace(/\n$/, '') : body, fault: soapInfo(p.root)?.fault ?? null };
+  return { text: canFormat(p) ? serializeDocument(p).replace(/\n$/, '') : body, fault: soapInfo(p.root)?.fault ?? null };
 }
 
 // ── JSON and XML viewer sources ─────────────────────────

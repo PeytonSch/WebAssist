@@ -94,6 +94,8 @@ export interface XmlParse {
   end: number;
   /** How many elements were read. */
   elements: number;
+  /** How deeply elements nest: 1 for a root alone. */
+  depth: number;
   /** The first namespace each prefix was bound to ("" is the default namespace). */
   prefixes: Map<string, string>;
   /** Entity references that are not built in (&nbsp;), left as written. */
@@ -162,7 +164,7 @@ export function parseXml(text: string, opts: { from?: number; trailing?: boolean
   let i = opts.from ?? 0;
   if (i === 0 && s.charCodeAt(0) === 0xfeff) i = 1;
   const res: XmlParse = {
-    root: null, before: [], after: [], decl: null, doctype: false, partial: false, error: null, end: len, elements: 0, prefixes: new Map(), unknownEntities: 0,
+    root: null, before: [], after: [], decl: null, doctype: false, partial: false, error: null, end: len, elements: 0, depth: 0, prefixes: new Map(), unknownEntities: 0,
   };
   let ord = 0;
   let root: XEl | null = null;
@@ -437,6 +439,7 @@ export function parseXml(text: string, opts: { from?: number; trailing?: boolean
     for (const a of el.attrs) a.ns = a.decl ? XMLNS_NS : a.prefix ? scope[a.prefix] || null : null;
     if (cur) cur.kids.push(el);
     else root = el;
+    if (open.length + 1 > res.depth) res.depth = open.length + 1;
     if (cutInTag) {
       open.push(el);
       return ended();
@@ -453,6 +456,7 @@ export function parseXml(text: string, opts: { from?: number; trailing?: boolean
       }
     } else {
       open.push(el);
+      if (open.length > res.depth) res.depth = open.length;
       scopes.push(scope);
       cur = el;
     }
@@ -523,28 +527,58 @@ function openTag(el: XEl): string {
 const attrMarkup = (a: XAttr) => (a.src !== undefined ? a.src.replace(/"/g, '&quot;') : escAttr(a.value));
 const textMarkup = (t: XText) => (t.cdata ? `<![CDATA[${t.v.replace(/]]>/g, ']]]]><![CDATA[>')}]]>` : t.src ?? escText(t.v));
 
-/** A node with text beside elements is written on one line: white space there is content. */
-function writeInline(n: XChild, out: Writer): boolean {
-  switch (n.t) {
-    case 'text': return out.add(textMarkup(n));
-    case 'comment': return out.add(`<!--${n.v}-->`);
-    case 'pi': return out.add(`<?${n.target}${n.v ? ' ' + n.v : ''}?>`);
-    case 'el': {
-      if (!n.kids.length) return out.add(`${openTag(n)}/>`);
-      if (!out.add(`${openTag(n)}>`)) return false;
-      for (const k of n.kids) if (!writeInline(k, out)) return false;
-      return out.add(`</${n.name}>`);
+/**
+ * Writes `n` indented, or (inline) on one line: a node with text beside elements is written on
+ * one line, since white space there is content. With a work list instead of recursion, so a
+ * document nested tens of thousands deep (which the parser accepts) cannot overflow the stack.
+ * Returns false when the writer's limit was reached first.
+ */
+function write(n: XChild, indent: string, out: Writer): boolean {
+  type Job = string | { n: XChild; pad: string; inline: boolean };
+  const jobs: Job[] = [{ n, pad: '', inline: false }];
+  while (jobs.length) {
+    const job = jobs.pop()!;
+    if (typeof job === 'string') {
+      if (!out.add(job)) return false;
+      continue;
+    }
+    const { n: node, pad, inline } = job;
+    if (inline || node.t !== 'el') {
+      if (!inline) {
+        // Block form of a text, comment or PI: on its own line.
+        jobs.push('\n', { n: node, pad, inline: true });
+        if (!out.add(pad)) return false;
+        continue;
+      }
+      if (node.t === 'text') {
+        if (!out.add(textMarkup(node))) return false;
+      } else if (node.t === 'comment') {
+        if (!out.add(`<!--${node.v}-->`)) return false;
+      } else if (node.t === 'pi') {
+        if (!out.add(`<?${node.target}${node.v ? ' ' + node.v : ''}?>`)) return false;
+      } else if (!node.kids.length) {
+        if (!out.add(`${openTag(node)}/>`)) return false;
+      } else {
+        if (!out.add(`${openTag(node)}>`)) return false;
+        jobs.push(`</${node.name}>`);
+        for (let k = node.kids.length - 1; k >= 0; k--) jobs.push({ n: node.kids[k], pad, inline: true });
+      }
+      continue;
+    }
+    if (!node.kids.length) {
+      if (!out.add(`${pad}${openTag(node)}/>\n`)) return false;
+    } else if (node.kids.some((k) => k.t === 'text')) {
+      jobs.push('\n', { n: node, pad, inline: true });
+      if (!out.add(pad)) return false;
+    } else {
+      if (!out.add(`${pad}${openTag(node)}>\n`)) return false;
+      jobs.push(`${pad}</${node.name}>\n`);
+      // Indentation stops growing past FORMAT_MAX_DEPTH levels, so a hostile depth cannot blow up the text.
+      const inner = pad.length < FORMAT_MAX_DEPTH * indent.length ? pad + indent : pad;
+      for (let k = node.kids.length - 1; k >= 0; k--) jobs.push({ n: node.kids[k], pad: inner, inline: false });
     }
   }
-}
-
-function write(n: XChild, pad: string, indent: string, out: Writer): boolean {
-  if (n.t !== 'el') return out.add(pad) && writeInline(n, out) && out.add('\n');
-  if (!n.kids.length) return out.add(`${pad}${openTag(n)}/>\n`);
-  if (n.kids.some((k) => k.t === 'text')) return out.add(pad) && writeInline(n, out) && out.add('\n');
-  if (!out.add(`${pad}${openTag(n)}>\n`)) return false;
-  for (const k of n.kids) if (!write(k, pad + indent, indent, out)) return false;
-  return out.add(`${pad}</${n.name}>\n`);
+  return true;
 }
 
 /** A node as indented XML. Elements that hold text are kept on one line, so no text changes. */
@@ -556,7 +590,7 @@ export function serialize(n: XNode, indent = 2): string {
 export function serializeCapped(n: XNode, indent: number, limit: number): { text: string; cut: boolean } {
   if (n.t === 'attr') return { text: `${n.name}="${attrMarkup(n)}"`, cut: false };
   const out = new Writer(limit);
-  const done = write(n, '', ' '.repeat(indent), out);
+  const done = write(n, ' '.repeat(indent), out);
   const text = out.parts.join('').replace(/\n$/, '');
   return { text, cut: !done };
 }
@@ -574,12 +608,22 @@ export function serializeDocument(p: XmlParse, indent = 2): string {
 
 /** Past this size the detail panel shows XML as captured instead of pretty-printing it. */
 const PRETTY_MAX = 2_000_000;
+/**
+ * Nesting deeper than this is shown as captured rather than indented: no real payload nests
+ * that deep, and indenting a hostile one (tens of thousands deep) would make a huge text.
+ */
+export const FORMAT_MAX_DEPTH = 64;
+
+/** Whether a parsed document is worth indenting: whole, well-formed, and not absurdly deep. */
+export function canFormat(p: XmlParse): boolean {
+  return !!p.root && !p.error && !p.partial && !p.doctype && p.depth <= FORMAT_MAX_DEPTH;
+}
 
 /** `text` pretty-printed, or null when it is not complete, well-formed XML (or is very large). */
 export function prettyXml(text: string): string | null {
   if (text.length > PRETTY_MAX) return null;
   const p = parseXml(text);
-  if (!p.root || p.error || p.partial || p.doctype) return null;
+  if (!canFormat(p)) return null;
   return serializeDocument(p).replace(/\n$/, '');
 }
 
@@ -871,8 +915,16 @@ export function search(tops: readonly XNode[], query: string, limit = 10_000): {
     return false;
   };
   tops.forEach((top, ti) => {
+    // Depth first in document order, with a work list rather than recursion: the parser accepts
+    // documents nested far deeper than the call stack goes. `null` marks leaving an element.
     const chain: XEl[] = [];
-    const visit = (n: XNode): void => {
+    const work: (XNode | null)[] = [top];
+    while (work.length) {
+      const n = work.pop()!;
+      if (n === null) {
+        chain.pop();
+        continue;
+      }
       let hit: boolean;
       if (n.t === 'el') hit = elMatches(n);
       else if (n.t === 'attr') hit = has(n.name) || has(n.value);
@@ -884,11 +936,10 @@ export function search(tops: readonly XNode[], query: string, limit = 10_000): {
       }
       if (n.t === 'el' && !isLeaf(n)) {
         chain.push(n);
-        for (const k of n.kids) visit(k);
-        chain.pop();
+        work.push(null);
+        for (let k = n.kids.length - 1; k >= 0; k--) work.push(n.kids[k]);
       }
-    };
-    visit(top);
+    }
   });
   return { matches, total };
 }

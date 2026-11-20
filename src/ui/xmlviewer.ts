@@ -11,7 +11,7 @@ import { highlight, paint } from './highlight';
 import { plural, QueryError } from './jsonmodel';
 import { button, copyButton, download, IS_MAC, markText, QUERY_KEY, suggestList, VList } from './viewerkit';
 import {
-  canTable, cellOf, cellText, describe, faultSummary, findTable, isEl, isLeaf, namespacesInScope, nestedKind, nsDecls, parseXml, plainAttrs, preview, search,
+  canFormat, canTable, cellOf, cellText, describe, faultSummary, findTable, isEl, isLeaf, namespacesInScope, nestedKind, nsDecls, parseXml, plainAttrs, preview, search,
   serialize, serializeCapped, serializeDocument, soapInfo, tableOf, tableOfRows, textOf, xpathOf,
   type Match, type SoapInfo, type XAttr, type XEl, type XmlParse, type XNode, type XTable,
 } from './xmlmodel';
@@ -260,15 +260,24 @@ function flatten(): void {
 
 function addChildren(row: Row, out: Row[]): void {
   const d = doc();
-  const n = row.node as XEl;
-  // With "Only matching", a branch shows just the children that lead to a match, unless the
-  // branch itself matched (by its name or an attribute), in which case all of it is relevant.
-  const only = filtering() && !V.hits.has(n);
-  for (const child of n.kids) {
-    if (only && !V.hits.has(child) && !V.ancestors.has(child)) continue;
-    const r: Row = { node: child, parent: row, depth: row.depth + 1, top: row.top };
-    out.push(r);
-    if (hasRows(child) && d.expanded.has(child)) addChildren(r, out);
+  const filter = filtering();
+  // Rows in document order from a work list, not recursion: a document can nest deeper than the
+  // call stack goes, and All opens every level.
+  const work: Row[] = [row];
+  while (work.length) {
+    const r = work.pop()!;
+    if (r !== row) out.push(r);
+    if (r !== row && !(hasRows(r.node) && d.expanded.has(r.node))) continue;
+    const n = r.node as XEl;
+    // With "Only matching", a branch shows just the children that lead to a match, unless the
+    // branch itself matched (by its name or an attribute), in which case all of it is relevant.
+    const only = filter && !V.hits.has(n);
+    const kids: Row[] = [];
+    for (const child of n.kids) {
+      if (only && !V.hits.has(child) && !V.ancestors.has(child)) continue;
+      kids.push({ node: child, parent: r, depth: r.depth + 1, top: r.top });
+    }
+    for (let k = kids.length - 1; k >= 0; k--) work.push(kids[k]);
   }
 }
 
@@ -311,7 +320,8 @@ function treeRow(i: number): HTMLElement {
   const r = V.rows[i];
   const n = r.node;
   const el = h('div', { class: 'jv-row', 'data-i': String(i) });
-  el.style.paddingLeft = `${6 + r.depth * 16}px`;
+  // Past 32 levels rows stop moving right, so their text stays in view; real payloads rarely nest that deep.
+  el.style.paddingLeft = `${6 + Math.min(r.depth, 32) * 16}px`;
   if (i === V.selIdx) el.classList.add('sel');
   if (V.hits.has(n)) el.classList.add('hit');
   const m = V.matches[V.cur];
@@ -903,12 +913,34 @@ function renderRaw(): HTMLElement {
     renderMain();
     focusMain();
   }, `jv-mode${d.captured === captured ? ' on' : ''}`);
+  // Nested deeper than any real payload: indenting it would only make a huge text.
+  const formattable = canFormat(d.parsed);
   const info = h('div', { class: 'jv-tinfo' },
-    whole ? (d.captured ? 'The text as captured' : 'Pretty-printed') : h('code', {}, `${plural(d.tops.length, 'result')} of ${d.query.trim()}`),
+    whole
+      ? !formattable ? `The text as captured: it nests ${d.parsed.depth.toLocaleString()} deep, too deep to indent` : d.captured ? 'The text as captured' : 'Pretty-printed'
+      : h('code', {}, `${plural(d.tops.length, 'result')} of ${d.query.trim()}`),
     h('span', { class: 'spacer' }),
-    whole ? h('div', { class: 'jv-seg xv-rawpick', role: 'group', 'aria-label': 'Text' }, pick(false), pick(true)) : null);
-  const text = !whole ? d.tops.map((t) => serialize(t)).join('\n') : d.captured ? d.src.text : serializeDocument(d.parsed).replace(/\n$/, '');
+    whole && formattable ? h('div', { class: 'jv-seg xv-rawpick', role: 'group', 'aria-label': 'Text' }, pick(false), pick(true)) : null);
+  const text = !whole ? resultsText(d.tops) : d.captured || !canFormat(d.parsed) ? d.src.text : serializeDocument(d.parsed).replace(/\n$/, '');
   return h('div', { class: 'jv-tablewrap' }, info, rawText(text, null));
+}
+
+/** Past this many characters the Raw view of query results stops: results can overlap (//a in nested a's). */
+const RESULTS_TEXT_MAX = 5_000_000;
+
+function resultsText(tops: readonly XNode[]): string {
+  const parts: string[] = [];
+  let left = RESULTS_TEXT_MAX;
+  for (let i = 0; i < tops.length; i++) {
+    const { text, cut } = serializeCapped(tops[i], 2, left);
+    parts.push(text);
+    left -= text.length;
+    if (cut || left <= 0) {
+      parts.push(`… cut off here: the results go on (${tops.length - i - 1} more). Narrow the XPath to see them.`);
+      break;
+    }
+  }
+  return parts.join('\n');
 }
 
 // ── Side panel ──────────────────────────────────────────
