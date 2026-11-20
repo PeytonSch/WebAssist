@@ -17,7 +17,7 @@ import { basicAuth, buildTransport, displayUrl, downloadTo, failure, fetchAnswer
 import type { RegistryContext } from '../src/server/registry/types';
 import { urlKind } from '../src/server/registry/url';
 import { baseVersion, compareVersions, isSnapshot, sortNewestFirst, versionMatcher } from '../src/server/registry/version';
-import type { RegistryConfig, RegistryMessage } from '../src/shared/registry';
+import type { NotifyMode, RegistryConfig, RegistryMessage } from '../src/shared/registry';
 import type { HubEvent } from '../src/shared/types';
 
 // ── A fake registry ─────────────────────────────────────
@@ -148,6 +148,7 @@ function registry(over: Partial<RegistryConfig> & { url: string }): RegistryConf
     caFile: '',
     timeoutMs: 5000,
     checkMinutes: 0,
+    notify: 'all',
     packages: [{ groupId: 'com.example', artifactId: 'shop', classifier: '', extension: 'war', versions: 'all', versionPattern: '', deployAs: '' }],
     ...over,
   };
@@ -940,6 +941,7 @@ describe('registry settings', () => {
       caFile: '',
       timeoutMs: 30_000,
       checkMinutes: 15,
+      notify: 'all',
       packages: [{ groupId: 'com.example', artifactId: 'shop', classifier: '', extension: 'war', versions: 'all', versionPattern: '', deployAs: '' }],
     });
     expect(registries[1]).toMatchObject({ auth: { type: 'bearer', token: '${env:NEXUS_TOKEN}' }, checkMinutes: 0 });
@@ -1056,6 +1058,65 @@ describe('checking for new versions', () => {
     await svc.checkNow();
     expect(notices(messages)).toEqual(['shop 2.5.0-SNAPSHOT']);
     expect(svc.state.get(KEY)!.announced).toEqual({ version: '2.5.0-SNAPSHOT', build: '2.5.0-20261115.090000-2' });
+  });
+
+  it('notifies as the registry says, and as a package is set to: releases only, while deployed, muted', async () => {
+    const store = mavenStore(['2.4.0']);
+    const fake = await serve(files(store));
+    const names: string[] = [];
+    const { svc, messages, events } = makeService([registry({ url: fake.url + REPO, notify: 'releases' })], { names });
+    await svc.checkNow();
+    let pkg = (await svc.snapshot()).registries[0].packages[0];
+    expect(pkg).toMatchObject({ notify: 'releases', notifyFrom: 'registry', alert: false });
+    expect((await svc.snapshot()).registries[0].notify).toBe('releases');
+
+    // Releases only: a new SNAPSHOT is New on the card, with no notice; the timeline has it.
+    publish(store, '2.5.0-SNAPSHOT');
+    store.set(`${SHOP}/2.5.0-SNAPSHOT/maven-metadata.xml`, snapshotMeta('2.5.0-SNAPSHOT', '20261114.101502', 1));
+    await svc.checkNow();
+    pkg = (await svc.snapshot()).registries[0].packages[0];
+    expect(pkg).toMatchObject({ latest: '2.5.0-SNAPSHOT', fresh: true, alert: false });
+    expect(notices(messages)).toEqual([]);
+    expect(events.at(-1)?.summary).toBe('New package version: shop 2.5.0-SNAPSHOT (com.example:shop, Nexus) (no notice: notifications for it are set otherwise)');
+    publish(store, '2.5.0');
+    await svc.checkNow();
+    expect(notices(messages)).toEqual(['shop 2.5.0']);
+    expect((await svc.snapshot()).registries[0].packages[0]).toMatchObject({ fresh: true, alert: true });
+
+    // While deployed: nothing until shop is in webapps.
+    expect(svc.setNotify(KEY, 'deployed')).toBe('Notifications for shop: only while deployed.');
+    expect((await svc.snapshot()).registries[0].packages[0]).toMatchObject({ notify: 'deployed', notifyFrom: 'package', alert: false });
+    publish(store, '2.6.0');
+    await svc.checkNow();
+    expect(notices(messages)).toEqual(['shop 2.5.0']);
+    names.push('shop');
+    expect((await svc.snapshot()).registries[0].packages[0].alert).toBe(true);
+    publish(store, '2.7.0');
+    await svc.checkNow();
+    expect(notices(messages)).toEqual(['shop 2.5.0', 'shop 2.7.0']);
+
+    // Muted: kept across a restart, marked New, never announced.
+    expect(svc.setNotify(KEY, 'off')).toBe('Muted shop: its new versions are only marked New on the Tomcat page.');
+    expect((await svc.snapshot()).registries[0].packages[0]).toMatchObject({ fresh: true, alert: false });
+    publish(store, '2.8.0');
+    await svc.checkNow();
+    expect(notices(messages)).toEqual(['shop 2.5.0', 'shop 2.7.0']);
+    expect(JSON.parse(readFileSync(join(dir, STATE_FILE), 'utf8')).packages[KEY].notify).toBe('off');
+
+    // Back to the registry's setting; choosing what the registry says anyway is the same.
+    expect(svc.setNotify(KEY, null)).toBe('Notifications for shop: new releases only, as set for Nexus.');
+    svc.setNotify(KEY, 'off');
+    svc.setNotify(KEY, 'releases');
+    expect(svc.state.get(KEY)!.notify).toBeUndefined();
+    expect(() => svc.setNotify(KEY, 'loud' as NotifyMode)).toThrow(/Notify must be one of/);
+    expect(() => svc.setNotify('Nexus::nope', 'off')).toThrow(/not in the registries/);
+  });
+
+  it('says which notify settings are not valid', () => {
+    const errors: FieldError[] = [];
+    validateRegistries([{ ...registry({ url: 'https://nexus.example.com' }), notify: 'sometimes' }], errors);
+    expect(errors).toEqual([{ path: 'registries.0.notify', message: 'Must be one of all, releases, deployed, off' }]);
+    expect(validateRegistries([{ ...registry({ url: 'https://nexus.example.com' }), notify: undefined }], [])[0].notify).toBe('all');
   });
 
   it('filters releases, snapshots and version patterns before deciding what is latest', async () => {

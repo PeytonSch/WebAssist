@@ -1,4 +1,4 @@
-import type { DownloadInfo, DownloadResult, PackageInfo, PackageNotice, RegistryInfo, RegistryMessage, RegistryState } from '../shared/registry';
+import { NOTIFY_HELP, NOTIFY_LABELS, NOTIFY_MODES, type DownloadInfo, type DownloadResult, type NotifyMode, type PackageInfo, type PackageNotice, type RegistryInfo, type RegistryMessage, type RegistryState } from '../shared/registry';
 import { REGISTRY_FORMS } from '../shared/registry-forms';
 import { fmtBytes, h, type Child } from './dom';
 import { openSettings } from './settings';
@@ -92,9 +92,13 @@ function keepFresh(): void {
   }, POLL_MS);
 }
 
-/** Notices follow the hub: a version deployed or dismissed in another window goes away here too. */
+/**
+ * Notices follow the hub: a version deployed or dismissed in another window goes away here too,
+ * and so does one whose package was muted. Fresh versions the notify setting does not want a
+ * notice for are only marked New on the card.
+ */
 function syncNotices(): void {
-  const fresh = new Map(allPackages().filter((p) => p.fresh && p.latest).map((p) => [p.key, p]));
+  const fresh = new Map(allPackages().filter((p) => p.alert && p.latest).map((p) => [p.key, p]));
   let changed = false;
   for (const key of [...P.notices.keys()]) {
     if (!fresh.has(key)) {
@@ -112,6 +116,8 @@ function syncNotices(): void {
 }
 
 function say(kind: 'error' | 'info', text: string): void {
+  // The newest one says what matters: an older one still fading out would sit under it.
+  for (const old of document.querySelectorAll('.pkg-toast')) old.remove();
   const el = h('div', { class: `toast pkg-toast ${kind}`, role: kind === 'error' ? 'alert' : 'status' }, text);
   document.body.append(el);
   setTimeout(() => el.classList.add('out'), kind === 'error' ? 9000 : 4000);
@@ -159,6 +165,22 @@ async function saveTarget(key: string, value: string): Promise<void> {
     P.editing = { key, value, error: (err as Error).message };
   } finally {
     P.busy.delete(`${key}:as`);
+    redrawCard();
+  }
+}
+
+/** Which new versions of a package raise a notice; null: the registry's setting. */
+async function setNotify(key: string, mode: NotifyMode | null): Promise<void> {
+  P.busy.add(`${key}:notify`);
+  redrawCard();
+  try {
+    const { message, state } = await api<{ message: string; state: RegistryState }>('/api/registry/notify', { key, notify: mode ?? '' });
+    adopt(state);
+    say('info', message);
+  } catch (err) {
+    say('error', (err as Error).message);
+  } finally {
+    P.busy.delete(`${key}:notify`);
     redrawCard();
   }
 }
@@ -221,6 +243,125 @@ function paintProgress(el: HTMLElement, d: DownloadInfo | undefined): void {
   const known = !!d?.total && d.phase !== 'starting';
   el.classList.toggle('unknown', !known);
   fill.style.width = known ? `${Math.min(100, (d!.received / d!.total!) * 100).toFixed(1)}%` : '';
+}
+
+// ── Notify ──────────────────────────────────────────────
+
+const BELL = 'M5.5 8.5a4.5 4.5 0 0 1 9 0c0 3.6 1.3 5 1.9 5.6H3.6c.6-.6 1.9-2 1.9-5.6ZM8.4 16.6a1.7 1.7 0 0 0 3.2 0';
+const SLASH = 'M3.5 3.5l13 13';
+
+function bellIcon(off: boolean): SVGElement {
+  const ns = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(ns, 'svg');
+  svg.setAttribute('viewBox', '0 0 20 20');
+  svg.setAttribute('width', '15');
+  svg.setAttribute('height', '15');
+  svg.setAttribute('aria-hidden', 'true');
+  for (const d of off ? [BELL, SLASH] : [BELL]) {
+    const p = document.createElementNS(ns, 'path');
+    p.setAttribute('d', d);
+    p.setAttribute('fill', 'none');
+    p.setAttribute('stroke', 'currentColor');
+    p.setAttribute('stroke-width', '1.6');
+    p.setAttribute('stroke-linecap', 'round');
+    p.setAttribute('stroke-linejoin', 'round');
+    svg.append(p);
+  }
+  return svg;
+}
+
+/** What the bell says, for its title. */
+function notifySays(p: PackageInfo): string {
+  const how = p.notify === 'off' ? 'Muted: new versions are only marked New here' : `Notifies: ${NOTIFY_LABELS[p.notify].toLowerCase()}`;
+  return `${how} (${p.notifyFrom === 'package' ? 'set for this package' : `as set for ${p.registry}`}). Click to change.`;
+}
+
+let openMenu: { el: HTMLElement; close: () => void } | null = null;
+
+/** The bell's menu: the registry's setting, or one of the modes for this package alone. */
+function openNotifyMenu(p: PackageInfo, anchor: HTMLElement, registryMode: NotifyMode): void {
+  openMenu?.close();
+  const choose = (mode: NotifyMode | null) => {
+    close();
+    void setNotify(p.key, mode);
+  };
+  const item = (label: string, help: string, on: boolean, mode: NotifyMode | null) => {
+    const b = h(
+      'button',
+      { type: 'button', class: `pkg-menu-item${on ? ' on' : ''}`, role: 'menuitemradio', 'aria-checked': String(on) },
+      h('span', { class: 'pkg-menu-check', 'aria-hidden': 'true' }, on ? '✓' : ''),
+      h('span', {}, h('span', { class: 'pkg-menu-label' }, label), h('span', { class: 'pkg-menu-help muted' }, help)),
+    );
+    b.addEventListener('click', () => choose(mode));
+    return b;
+  };
+  const own = p.notifyFrom === 'package';
+  const el = h(
+    'div',
+    { class: 'pkg-menu', role: 'menu', 'aria-label': `Notifications for ${p.name}` },
+    h('div', { class: 'pkg-menu-head' }, `Notify about new versions of ${p.name}`),
+    item(`As set for ${p.registry}`, NOTIFY_LABELS[registryMode], !own, null),
+    h('div', { class: 'pkg-menu-sep' }),
+    ...NOTIFY_MODES.map((m) => item(m === 'off' ? 'Off (muted)' : NOTIFY_LABELS[m], NOTIFY_HELP[m], own && p.notify === m, m)),
+  );
+  document.body.append(el);
+  const r = anchor.getBoundingClientRect();
+  const w = el.offsetWidth;
+  el.style.left = `${Math.max(8, Math.min(window.innerWidth - w - 8, r.right - w))}px`;
+  const below = r.bottom + 4;
+  el.style.top = `${below + el.offsetHeight > window.innerHeight - 8 ? Math.max(8, r.top - el.offsetHeight - 4) : below}px`;
+  const onDown = (e: Event) => {
+    if (!el.contains(e.target as Node) && !anchor.contains(e.target as Node)) close();
+  };
+  const onKey = (e: KeyboardEvent) => {
+    if (e.key === 'Escape') {
+      e.stopPropagation();
+      e.preventDefault();
+      close();
+      anchor.focus();
+    } else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      const items = [...el.querySelectorAll<HTMLElement>('.pkg-menu-item')];
+      const at = items.indexOf(document.activeElement as HTMLElement);
+      items[(at + (e.key === 'ArrowDown' ? 1 : items.length - 1)) % items.length]?.focus();
+    }
+  };
+  function close(): void {
+    el.remove();
+    document.removeEventListener('pointerdown', onDown, true);
+    document.removeEventListener('keydown', onKey, true);
+    window.removeEventListener('scroll', close, true);
+    window.removeEventListener('resize', close);
+    if (openMenu?.el === el) openMenu = null;
+  }
+  document.addEventListener('pointerdown', onDown, true);
+  document.addEventListener('keydown', onKey, true);
+  window.addEventListener('scroll', close, true);
+  window.addEventListener('resize', close);
+  openMenu = { el, close };
+  (el.querySelector<HTMLElement>('.pkg-menu-item.on') ?? el.querySelector<HTMLElement>('.pkg-menu-item'))?.focus();
+}
+
+/** The bell on a package's row: how it notifies, and the menu to change that. */
+function bellButton(p: PackageInfo, registryMode: NotifyMode): HTMLElement {
+  const off = p.notify === 'off';
+  const short = p.notify === 'releases' ? 'releases' : p.notify === 'deployed' ? 'if deployed' : '';
+  const b = h(
+    'button',
+    {
+      type: 'button',
+      class: `pkg-bell${off ? ' off' : ''}${p.notifyFrom === 'package' ? ' own' : ''}`,
+      title: notifySays(p),
+      'aria-label': `Notifications for ${p.name}: ${off ? 'muted' : NOTIFY_LABELS[p.notify]}`,
+      'aria-haspopup': 'menu',
+      'data-f': `${p.key}:bell`,
+    },
+    bellIcon(off),
+    short ? h('span', { class: 'pkg-bell-text' }, short) : null,
+  ) as HTMLButtonElement;
+  b.disabled = P.busy.has(`${p.key}:notify`);
+  b.addEventListener('click', () => (openMenu ? openMenu.close() : openNotifyMenu(p, b, registryMode)));
+  return b;
 }
 
 const TARGET_FROM: Record<PackageInfo['targetFrom'], string> = {
@@ -306,7 +447,7 @@ function targetEditor(p: PackageInfo): HTMLElement {
   );
 }
 
-function packageRow(p: PackageInfo, canDeploy: boolean): HTMLElement {
+function packageRow(p: PackageInfo, canDeploy: boolean, registryMode: NotifyMode): HTMLElement {
   const downloading = P.busy.has(p.key) || P.downloads.has(p.key);
   const picked = p.versions.find((v) => v.version === P.picked.get(p.key)) ?? p.versions[0];
   const select = h(
@@ -384,6 +525,7 @@ function packageRow(p: PackageInfo, canDeploy: boolean): HTMLElement {
       h('b', {}, p.name),
       p.fresh ? h('span', { class: 'tm-tag new', title: `${p.latest} was not there at the last look` }, 'New') : null,
       picked?.snapshot ? h('span', { class: 'tm-tag', title: 'A snapshot: rebuilt under the same version' }, 'snapshot') : null,
+      bellButton(p, registryMode),
     ),
     h('span', { class: 'muted pkg-coords', title: p.coordinates }, p.coordinates),
     p.versions.length ? select : h('span', { class: 'muted' }, 'No versions'),
@@ -391,7 +533,7 @@ function packageRow(p: PackageInfo, canDeploy: boolean): HTMLElement {
     // The editor takes the actions' room too.
     editing ? null : h('div', { class: 'tm-actions' }, ...actions),
   );
-  return searchable(row, p.name, p.coordinates, p.target, p.registry, p.fresh && 'new', picked?.snapshot && 'snapshot');
+  return searchable(row, p.name, p.coordinates, p.target, p.registry, p.fresh && 'new', picked?.snapshot && 'snapshot', p.notify === 'off' && 'muted');
 }
 
 /** Found, but none of its versions pass the version settings (Versions, Version pattern). */
@@ -418,7 +560,7 @@ function registryBlock(r: RegistryInfo, canDeploy: boolean): HTMLElement {
     body.push(note);
   }
   const shown = P.hideUnmatched ? r.packages.filter((p) => !unmatched(p)) : r.packages;
-  body.push(...shown.map((p) => packageRow(p, canDeploy)));
+  body.push(...shown.map((p) => packageRow(p, canDeploy, r.notify)));
   if (r.packages.length && !shown.length) {
     const n = r.packages.length;
     body.push(missing(`${n === 1 ? 'Its package is' : `All ${n} packages are`} hidden: none of ${n === 1 ? 'its' : 'their'} versions pass the version settings.`));
@@ -520,7 +662,7 @@ export function packageNotices(room = MAX_NOTICES): HTMLElement[] {
     const downloading = P.busy.has(n.key) || P.downloads.has(n.key);
     const actions = downloading
       ? [button('Cancel', () => cancelDownload(n.key), { disabled: !P.downloads.has(n.key) })]
-      : [button('Dismiss', () => dismiss(n.key)), button(isCached(n.key, n.version) ? 'Deploy…' : 'Download & deploy…', () => void downloadAndDeploy(n.key, n.version), { primary: true })];
+      : [muteButton(n), button('Dismiss', () => dismiss(n.key)), button(isCached(n.key, n.version) ? 'Deploy…' : 'Download & deploy…', () => void downloadAndDeploy(n.key, n.version), { primary: true })];
     return h(
       'div',
       { class: 'war-notice', role: 'status' },
@@ -535,6 +677,17 @@ export function packageNotices(room = MAX_NOTICES): HTMLElement[] {
     cards.push(h('div', { class: 'war-notice more' }, h('span', { class: 'muted' }, `${rest} more new version${rest === 1 ? '' : 's'} on the Tomcat page`)));
   }
   return cards;
+}
+
+/** Mute, on a notice: no more notices for this package, until its bell says otherwise. */
+function muteButton(n: PackageNotice): HTMLElement {
+  const b = button('Mute', () => {
+    P.notices.delete(n.key);
+    renderNotices();
+    void setNotify(n.key, 'off');
+  }, { title: `No more notices for ${n.name}. Its new versions are still marked New on the Tomcat page, where its bell turns them back on.` });
+  b.classList.add('btn-ghost');
+  return b;
 }
 
 function systemNotify(n: PackageNotice): void {

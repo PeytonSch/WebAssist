@@ -28,6 +28,31 @@ export interface RegistryAuth {
 
 export type VersionKinds = 'all' | 'releases' | 'snapshots';
 
+/**
+ * Which new versions raise a notice (on every screen, and a desktop notification):
+ * all:      every new version, snapshot rebuilds included.
+ * releases: new release versions only; a rebuilt or new SNAPSHOT is only marked New on the Tomcat page.
+ * deployed: only for packages deployed in Tomcat now (under the name they deploy as).
+ * off:      none; new versions are only marked New on the Tomcat page, and noted on the timeline.
+ */
+export type NotifyMode = 'all' | 'releases' | 'deployed' | 'off';
+
+export const NOTIFY_MODES: NotifyMode[] = ['all', 'releases', 'deployed', 'off'];
+
+export const NOTIFY_LABELS: Record<NotifyMode, string> = {
+  all: 'Every new version',
+  releases: 'New releases only',
+  deployed: 'Only while deployed',
+  off: 'Off',
+};
+
+export const NOTIFY_HELP: Record<NotifyMode, string> = {
+  all: 'Snapshot rebuilds included.',
+  releases: 'Not for new or rebuilt snapshots.',
+  deployed: 'Only for packages deployed in Tomcat now.',
+  off: 'New versions are only marked New on the Tomcat page.',
+};
+
 /** One thing to look for in a registry. Which fields apply depends on the registry's type. */
 export interface RegistryPackage {
   /** maven. */
@@ -71,12 +96,15 @@ export interface RegistryConfig {
   timeoutMs: number;
   /** How often to look for new versions. 0: only with Check now. */
   checkMinutes: number;
+  /** Which new versions are announced; a package can be set otherwise on the Tomcat page. */
+  notify: NotifyMode;
   packages: RegistryPackage[];
 }
 
 export const REGISTRY_DEFAULTS = {
   timeoutMs: 30_000,
   checkMinutes: 15,
+  notify: 'all' as NotifyMode,
   extension: 'war',
 } as const;
 
@@ -120,6 +148,12 @@ export interface PackageInfo {
   latest: string | null;
   /** The latest version appeared since it was last deployed or dismissed. */
   fresh: boolean;
+  /** Which new versions of it raise a notice. */
+  notify: NotifyMode;
+  /** Where that comes from: set for this package on the Tomcat page, or the registry's setting. */
+  notifyFrom: 'package' | 'registry';
+  /** Fresh, and the notify setting wants a notice for it: shown with the new-WAR notices. */
+  alert: boolean;
   /** The webapp name it would be deployed as. */
   target: string;
   /**
@@ -141,6 +175,8 @@ export interface RegistryInfo {
   checkedAt: string | null;
   /** When the next automatic check is due; null when automatic checks are off. */
   nextCheckAt: string | null;
+  /** Which new versions are announced, unless a package is set otherwise. */
+  notify: NotifyMode;
   /** Why the whole registry cannot be used: a setting, an environment variable that is not set. */
   error: string | null;
   /** What went wrong for single package entries; the others still work. */

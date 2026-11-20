@@ -645,6 +645,14 @@ below the WAR builds. Three kinds of registry cover most setups:
   WAR does, on every screen, once, also when it appeared while Debug Hub was not running.
   Dismiss it, or deploy it, and it is settled. Problems are shown per registry in the Packages
   list and noted on the timeline when they change.
+- **Notifications.** Each registry's `notify` (**Notify** in Settings) says which new versions
+  raise that notice and a desktop notification: `all` (every new version, the default),
+  `releases` (not new or rebuilt snapshots), `deployed` (only packages deployed in Tomcat now,
+  under the name they deploy as) or `off`. The bell beside a package's name on the Tomcat page
+  sets it otherwise for that package alone (muted shows a crossed-out bell; search `muted` to
+  list them), and **Mute** on a notice turns that package's notices off in one click. A version
+  that raises no notice is still marked **New** in the Packages list, and the timeline notes
+  every new version either way. Per-package choices are kept in `registry-state.json`.
 - **Download & deploy.** Pick a version (the latest, or an older one to roll back) and the
   WAR is downloaded to `registry-cache/` next to the settings file, with progress and a
   Cancel. It is checked against the registry's checksum when there is one (the `.sha256`,
@@ -784,6 +792,7 @@ A registry of each kind:
     "auth": { "type": "basic", "username": "ci", "password": "${env:NEXUS_PASSWORD}" },
     "caFile": "certs/company-root-ca.pem",
     "checkMinutes": 15,
+    "notify": "releases",
     "packages": [
       { "groupId": "com.example", "artifactId": "shop", "versions": "releases", "deployAs": "shop" },
       { "groupId": "com.example", "artifactId": "admin", "classifier": "prod", "versionPattern": "2.*" },
@@ -818,6 +827,7 @@ A registry of each kind:
 | `insecureTls` | `false` | Accept any https certificate from this registry. |
 | `timeoutMs` | `30000` | How long to wait for an answer, and for a download to move on. |
 | `checkMinutes` | `15` | How often to look for new versions; `0`: only with Check now. |
+| `notify` | `all` | Which new versions raise a notice: `all`, `releases`, `deployed` or `off`. A package's bell on the Tomcat page can set it otherwise. |
 | `packages` | `[]` | `maven`: `groupId`, optional `artifactId` (empty: every WAR of the group; `*` and `?` for some). `nexus3`: `repository`, optional `group`, `name`, `params`. `url`: `name`, `url`. All: `deployAs`. `maven` and `nexus3` also: `classifier`, `extension` (`war`), `versions` (`all`, `releases`, `snapshots`), `versionPattern`. |
 
 ## Sessions and privacy

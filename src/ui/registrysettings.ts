@@ -1,4 +1,4 @@
-import { REGISTRY_DEFAULTS, REGISTRY_TYPES, type RegistryAuth, type RegistryConfig, type RegistryPackage, type RegistryType, type TestResult } from '../shared/registry';
+import { NOTIFY_MODES, REGISTRY_DEFAULTS, REGISTRY_TYPES, type NotifyMode, type RegistryAuth, type RegistryConfig, type RegistryPackage, type RegistryType, type TestResult } from '../shared/registry';
 import { blankPackage, REGISTRY_FORMS, type EntryField } from '../shared/registry-forms';
 import { h, type Child } from './dom';
 import { api } from './tomcat';
@@ -23,6 +23,13 @@ export interface SettingsKit {
 
 const PATH = 'registries';
 
+const NOTIFY_OPTIONS: Record<NotifyMode, string> = {
+  all: 'Every new version',
+  releases: 'New releases only, not snapshots',
+  deployed: 'Only for packages deployed in Tomcat',
+  off: 'Off: only marked New on the Tomcat page',
+};
+
 const blankRegistry = (): RegistryConfig => ({
   name: '',
   type: 'maven',
@@ -33,6 +40,7 @@ const blankRegistry = (): RegistryConfig => ({
   caFile: '',
   timeoutMs: REGISTRY_DEFAULTS.timeoutMs,
   checkMinutes: REGISTRY_DEFAULTS.checkMinutes,
+  notify: REGISTRY_DEFAULTS.notify,
   packages: [],
 });
 
@@ -258,6 +266,13 @@ export function registryFields(kit: SettingsKit): HTMLElement[] {
       render();
     });
 
+    const notify = h(
+      'select',
+      { class: 'input', 'aria-label': `Notifications for registry ${i + 1}` },
+      ...NOTIFY_MODES.map((m) => h('option', { value: m }, NOTIFY_OPTIONS[m])),
+    ) as HTMLSelectElement;
+    notify.value = reg.notify ?? REGISTRY_DEFAULTS.notify;
+    notify.addEventListener('change', () => patch(i, (r) => (r.notify = notify.value as NotifyMode)));
     const insecure = h('input', { type: 'checkbox' }) as HTMLInputElement;
     insecure.checked = reg.insecureTls === true;
     insecure.addEventListener('change', () => patch(i, (r) => (r.insecureTls = insecure.checked)));
@@ -316,6 +331,11 @@ export function registryFields(kit: SettingsKit): HTMLElement[] {
             : h('span', {}, 'Stored in the settings file as plain text. To keep it out of the file, write ', h('code', {}, '${env:NAME}'), ': Debug Hub then reads the environment variable NAME when it starts.'),
         ),
         row(form.entry.plural, entries(i, reg)),
+        row(
+          'Notify',
+          h('div', { class: 'list-row' }, notify),
+          'Which new versions show a notice on every screen and a desktop notification. Any package can be set otherwise with its bell on the Tomcat page; the timeline notes every new version either way.',
+        ),
       ),
       more,
       h('div', { class: 'reg-lines' }, row('Test', tester(i))),

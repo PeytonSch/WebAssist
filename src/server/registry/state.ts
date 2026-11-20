@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
+import { NOTIFY_MODES, type NotifyMode } from '../../shared/registry';
 
 /**
  * What the hub remembers about packages between restarts, in registry-state.json next to the
@@ -42,6 +43,8 @@ export interface PackageState {
    * than it would have been. Wins over the settings' Deploy as and the guess.
    */
   deployAs?: string;
+  /** Which new versions raise a notice, set on the Tomcat page. Not there: the registry's setting. */
+  notify?: NotifyMode;
   /**
    * Which versions the settings let through when `seen` was set. When that changes, what is latest
    * changes with it, and is not news.
@@ -85,6 +88,7 @@ function clean(v: unknown): PackageState | null {
     downloads,
     ...(typeof v.filter === 'string' ? { filter: v.filter } : {}),
     ...(typeof v.deployAs === 'string' && v.deployAs ? { deployAs: v.deployAs } : {}),
+    ...(NOTIFY_MODES.includes(v.notify) ? { notify: v.notify as NotifyMode } : {}),
     touchedAt: typeof v.touchedAt === 'string' ? v.touchedAt : new Date().toISOString(),
   };
 }
