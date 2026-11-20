@@ -2648,6 +2648,23 @@ select.input.pkg-version { width: 100%; height: 28px; padding: 0 24px 0 8px; fon
 .pkg-target-name { font-family: var(--mono); font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .pkg-target.own .pkg-target-name { color: var(--accent); font-weight: 600; }
 .pkg-target-arrow { margin-right: 4px; }
+/* The bell beside a package's name: how its new versions are announced, with a menu to change it. */
+.pkg-bell { flex: none; display: inline-flex; align-items: center; gap: 3px; height: 22px; padding: 0 4px; margin: -2px 0; border: 1px solid transparent; border-radius: 5px; background: none; color: var(--muted); font: 11px var(--sans); cursor: pointer; }
+.pkg-bell svg { opacity: 0.55; transition: opacity 0.12s; }
+.pkg-bell:hover, .pkg-bell:focus-visible { border-color: var(--border); background: var(--surface-2); color: var(--text); }
+.pkg-bell:hover svg, .pkg-bell:focus-visible svg, .pkg-bell.own svg, .pkg-bell.off svg { opacity: 1; }
+.pkg-bell.own { color: var(--accent); }
+.pkg-bell.off { color: var(--warn); }
+.pkg-bell-text { white-space: nowrap; }
+.pkg-menu { position: fixed; z-index: 1000; min-width: 250px; max-width: 320px; padding: 5px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); box-shadow: 0 10px 28px rgba(16, 24, 40, 0.18); font-size: 12.5px; }
+.pkg-menu-head { padding: 5px 8px 6px; color: var(--muted); font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pkg-menu-sep { height: 1px; margin: 4px 2px; background: var(--border); }
+.pkg-menu-item { display: flex; align-items: flex-start; gap: 6px; width: 100%; padding: 5px 8px 5px 4px; border: 0; border-radius: 5px; background: none; color: var(--text); font: inherit; text-align: left; cursor: pointer; }
+.pkg-menu-item:hover, .pkg-menu-item:focus-visible { background: var(--accent-soft); outline: none; }
+.pkg-menu-item.on .pkg-menu-label { font-weight: 600; }
+.pkg-menu-check { flex: none; width: 14px; color: var(--accent); font-weight: 700; text-align: center; }
+.pkg-menu-label { display: block; }
+.pkg-menu-help { display: block; font-size: 11.5px; }
 .pkg-target-edit { margin-left: 6px; font-size: 11px; opacity: 0.3; transition: opacity 0.12s; }
 .pkg-target:hover .pkg-target-edit, .pkg-target:focus-visible .pkg-target-edit { opacity: 0.9; }
 .pkg-as { grid-column: span 2; display: flex; flex-direction: column; gap: 3px; min-width: 0; font-size: 12px; }

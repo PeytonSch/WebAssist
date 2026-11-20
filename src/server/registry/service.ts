@@ -3,7 +3,11 @@ import { promises as fs } from 'node:fs';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import {
   MAX_LISTED_VERSIONS,
+  NOTIFY_LABELS,
+  NOTIFY_MODES,
+  REGISTRY_DEFAULTS,
   type DownloadInfo,
+  type NotifyMode,
   type DownloadResult,
   type PackageInfo,
   type RegistryConfig,
@@ -295,7 +299,15 @@ export class RegistryService {
     const names = announce.length ? await this.names() : null;
     for (const t of announce) {
       const version = t.latest!.version;
-      this.note('info', `New package version: ${t.found.name} ${version} (${t.found.coordinates}, ${r.cfg.name})`, { registry: r.cfg.name, package: t.found.coordinates, version });
+      // The timeline has it either way; the notice only if the package's notify setting wants it.
+      const wanted = this.wantsNotice(r, t, names!);
+      this.note('info', `New package version: ${t.found.name} ${version} (${t.found.coordinates}, ${r.cfg.name})${wanted ? '' : ' (no notice: notifications for it are set otherwise)'}`, {
+        registry: r.cfg.name,
+        package: t.found.coordinates,
+        version,
+        ...(wanted ? {} : { notify: this.notifyOf(r, t.key).mode }),
+      });
+      if (!wanted) continue;
       this.hooks.notify({
         type: 'registry',
         change: 'new',
@@ -384,6 +396,42 @@ export class RegistryService {
     throw new RegistryProblem('That package is not in the registries any more. Check again.', 404);
   }
 
+  /** Which new versions of a package raise a notice: its own setting, else its registry's. */
+  private notifyOf(r: Runtime, key: string): { mode: NotifyMode; from: PackageInfo['notifyFrom'] } {
+    const own = this.store.get(key)?.notify;
+    return own ? { mode: own, from: 'package' } : { mode: r.cfg.notify ?? REGISTRY_DEFAULTS.notify, from: 'registry' };
+  }
+
+  /** Whether the latest version of a package is one its notify setting wants a notice for. */
+  private wantsNotice(r: Runtime, t: Tracked, names: { deployed: string[]; all: string[] }): boolean {
+    if (!t.latest) return false;
+    const mode = this.notifyOf(r, t.key).mode;
+    if (mode === 'all') return true;
+    if (mode === 'releases') return !t.versions[0]?.snapshot;
+    if (mode === 'deployed') {
+      const deployed = new Set(names.deployed.map((n) => n.toLowerCase()));
+      const as = this.store.get(t.key)?.deployed?.as;
+      return deployed.has(this.target(t, names.all).toLowerCase()) || (!!as && deployed.has(as.toLowerCase()));
+    }
+    return false;
+  }
+
+  /** Sets which new versions of a package raise a notice; null goes back to the registry's setting. */
+  setNotify(key: string, mode: NotifyMode | null): string {
+    const { r, t } = this.find(key);
+    if (mode !== null && !NOTIFY_MODES.includes(mode)) throw new RegistryProblem(`Notify must be one of ${NOTIFY_MODES.join(', ')}.`);
+    const st = this.store.touch(key);
+    if (mode === null || mode === (r.cfg.notify ?? REGISTRY_DEFAULTS.notify)) delete st.notify;
+    else st.notify = mode;
+    this.save();
+    this.changed();
+    const now = this.notifyOf(r, key);
+    const label = NOTIFY_LABELS[now.mode].toLowerCase();
+    return now.mode === 'off'
+      ? `Muted ${t.found.name}: its new versions are only marked New on the Tomcat page.`
+      : `Notifications for ${t.found.name}: ${label}${now.from === 'registry' ? `, as set for ${r.cfg.name}` : ''}.`;
+  }
+
   /** The webapps there are; none when the webapps folder cannot be read. */
   private names(): Promise<{ deployed: string[]; all: string[] }> {
     return this.hooks.webappNames().catch(() => ({ deployed: [], all: [] }));
@@ -434,6 +482,7 @@ export class RegistryService {
       checking: !!r.checking,
       checkedAt: r.checkedAt ? new Date(r.checkedAt).toISOString() : null,
       nextCheckAt: r.nextCheckAt ? new Date(r.nextCheckAt).toISOString() : null,
+      notify: r.cfg.notify ?? REGISTRY_DEFAULTS.notify,
       error: r.error,
       problems: r.problems,
       packages: [...r.packages.values()]
@@ -457,6 +506,8 @@ export class RegistryService {
             versionCount: t.versions.length,
             latest: t.latest?.version ?? null,
             fresh: !!t.latest && !!st && this.isNews(r.kind, t.latest, st.seen),
+            ...(({ mode, from }) => ({ notify: mode, notifyFrom: from }))(this.notifyOf(r, t.key)),
+            alert: !!t.latest && !!st && this.isNews(r.kind, t.latest, st.seen) && this.wantsNotice(r, t, names),
             ...(({ target, from }) => ({ target, targetFrom: from }))(this.targetOf(t, names.all)),
             deployed: st?.deployed && names.deployed.includes(st.deployed.as) ? { version: st.deployed.version, as: st.deployed.as, at: st.deployed.at } : null,
             download: this.downloads.get(t.key)?.info ?? null,

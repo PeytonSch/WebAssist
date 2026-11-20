@@ -1,4 +1,5 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import type { NotifyMode } from '../../shared/registry';
 import { RegistryProblem, type RegistryService } from './service';
 
 type Json = (res: ServerResponse, status: number, body: unknown) => void;
@@ -16,6 +17,7 @@ type ReadBody = (req: IncomingMessage) => Promise<string>;
  *   POST /api/registry/cancel      { key } stop that download
  *   POST /api/registry/dismiss     { key } the latest version has been seen
  *   POST /api/registry/target      { key, deployAs } the webapp name it deploys as; empty: the settings' or the guess
+ *   POST /api/registry/notify      { key, notify } which new versions raise a notice; empty: the registry's setting
  */
 export async function registryRoute(
   registry: RegistryService,
@@ -51,6 +53,11 @@ export async function registryRoute(
       const b = await body();
       await registry.setTarget(String(b.key ?? ''), typeof b.deployAs === 'string' ? b.deployAs : '');
       return json(res, 200, await registry.snapshot()), true;
+    }
+    if (path === '/api/registry/notify') {
+      const b = await body();
+      const message = registry.setNotify(String(b.key ?? ''), typeof b.notify === 'string' && b.notify ? (b.notify as NotifyMode) : null);
+      return json(res, 200, { message, state: await registry.snapshot() }), true;
     }
     if (path === '/api/registry/dismiss') {
       registry.dismiss(String((await body()).key ?? ''));

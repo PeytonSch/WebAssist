@@ -1,4 +1,4 @@
-import { ENV_REF, REGISTRY_DEFAULTS, REGISTRY_TYPES, type RegistryAuth, type RegistryConfig, type RegistryPackage, type RegistryType, type VersionKinds } from '../../shared/registry';
+import { ENV_REF, NOTIFY_MODES, REGISTRY_DEFAULTS, REGISTRY_TYPES, type NotifyMode, type RegistryAuth, type RegistryConfig, type RegistryPackage, type RegistryType, type VersionKinds } from '../../shared/registry';
 import { REGISTRY_FORMS } from '../../shared/registry-forms';
 import type { FieldError } from '../config';
 import { checkName } from '../tomcat/webapps';
@@ -73,6 +73,12 @@ export function validateRegistries(input: unknown, errors: FieldError[], path = 
       return fallback;
     }
     return n;
+  };
+  const notifyMode = (at: string, v: unknown): NotifyMode => {
+    if (v === undefined || v === null || v === '') return REGISTRY_DEFAULTS.notify;
+    if (NOTIFY_MODES.includes(v as NotifyMode)) return v as NotifyMode;
+    fail(at, `Must be one of ${NOTIFY_MODES.join(', ')}`);
+    return REGISTRY_DEFAULTS.notify;
   };
 
   const out: RegistryConfig[] = [];
@@ -180,6 +186,7 @@ export function validateRegistries(input: unknown, errors: FieldError[], path = 
       timeoutMs: int(`${at}.timeoutMs`, item.timeoutMs, REGISTRY_DEFAULTS.timeoutMs, 1000, 600_000, 'Timeout'),
       // 0 turns automatic checks off; otherwise no more often than once a minute.
       checkMinutes: int(`${at}.checkMinutes`, item.checkMinutes, REGISTRY_DEFAULTS.checkMinutes, 0, 7 * 24 * 60, 'Check every'),
+      notify: notifyMode(`${at}.notify`, item.notify),
       packages,
     });
   });
