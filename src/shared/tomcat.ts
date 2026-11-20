@@ -192,6 +192,16 @@ export interface RestartState {
   message: string | null;
 }
 
+/** The restart Debug Hub gives a webapp once Tomcat has deployed the WAR it was just sent. */
+export interface DeployRestart {
+  name: string;
+  /** waiting: for Tomcat to deploy the new WAR; restarting: reloading (or starting) it. */
+  phase: 'waiting' | 'restarting' | 'done' | 'failed' | 'skipped';
+  startedAt: string;
+  endedAt: string | null;
+  message: string | null;
+}
+
 export interface TomcatState {
   settings: {
     webappsDir: string;
@@ -201,6 +211,7 @@ export interface TomcatState {
     managerUrl: string;
     warWatch: string[];
     startChrome: boolean;
+    restartAfterDeploy: boolean;
   };
   launch: TomcatLaunch;
   /** The start commands from the settings, each with its latest run. */
@@ -225,6 +236,8 @@ export interface TomcatState {
   consoles: ConsoleSource[];
   /** The latest Restart Tomcat. */
   restart: RestartState | null;
+  /** Restarts after deploys, running and recently ended, newest first. */
+  deployRestarts: DeployRestart[];
   wars: WarInfo[];
   /** Saved sets of webapps, each with what applying it would move. */
   sets: WebappSets;

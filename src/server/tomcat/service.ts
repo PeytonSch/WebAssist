@@ -3,7 +3,7 @@ import { basename, isAbsolute, join, relative } from 'node:path';
 import type { HubEvent, Level } from '../../shared/types';
 import type {
   AppFolder, CommandRun, ConsoleChunk, ConsoleSource, KeepPreview, RestartState, ScriptKind, ScriptRun, StartSequence, TomcatState, WarInfo, WebappAction, WebappInfo,
-  ApplySetResult, WebappSet, WebappSets,
+  ApplySetResult, DeployRestart, WebappSet, WebappSets,
 } from '../../shared/tomcat';
 import { EntryGrouper } from '../collectors/logfile';
 import type { Config } from '../config';
@@ -44,6 +44,10 @@ export interface TomcatServiceOptions {
   commandWaitMs?: number;
   /** How long Restart waits for Tomcat to stop before ending it. Default 60 seconds. */
   restartWaitMs?: number;
+  /** How long a restart after a deploy waits for Tomcat to deploy the new WAR. Default 2 minutes. */
+  deployRestartWaitMs?: number;
+  /** How often it asks the Manager meanwhile. Default 2 seconds. */
+  deployRestartPollMs?: number;
   /** Stands in for this machine when working out how Tomcat starts. */
   machine?: LaunchMachine;
   warPollMs?: number;
@@ -57,6 +61,12 @@ export type ChromeStarter = () => Promise<{ ok: boolean; message: string; hint?:
 
 const COMMAND_WAIT_MS = 5 * 60_000;
 const RESTART_WAIT_MS = 60_000;
+const DEPLOY_RESTART_WAIT_MS = 120_000;
+const DEPLOY_RESTART_POLL_MS = 2000;
+/** A WAR Tomcat does not unpack leaves no folder to show it was redeployed: listed this long after counts. */
+const UNPACKED_GRACE_MS = 15_000;
+/** Ended restarts after deploys stay on the page this long. */
+const DEPLOY_RESTART_SHOWN_MS = 10 * 60_000;
 /** Output from before Debug Hub restarted is offered this long after it was last written. */
 const EARLIER_OUTPUT_MS = 24 * 3600_000;
 
@@ -95,6 +105,8 @@ export class TomcatService {
   private commandOutputs = new Map<number, { follower: OutputFollower; grouper: EntryGrouper }>();
   private sequence: Sequence | null = null;
   private restartState: RestartState | null = null;
+  /** The restart after the latest deploy of each webapp, by name. */
+  private deployRestarts = new Map<string, DeployRestart>();
   private started = false;
   /** Starts Chrome for "Also start Chrome"; without it that step reports it is not available. */
   chromeStarter: ChromeStarter | null = null;
@@ -365,6 +377,7 @@ export class TomcatService {
         managerUrl: t.manager.url,
         warWatch: t.warWatch,
         startChrome: t.startChrome,
+        restartAfterDeploy: t.restartAfterDeploy,
       },
       launch: this.plan().info,
       commands: await Promise.all(
@@ -379,6 +392,7 @@ export class TomcatService {
       scripts: { start: await this.scripts.snapshot('start'), stop: await this.scripts.snapshot('stop') },
       consoles: await this.consoleSources(),
       restart: this.restartState ? structuredClone(this.restartState) : null,
+      deployRestarts: this.deployRestartList(),
       wars: this.watcher.list().map((w) => this.warInfo(w, names)),
       sets: this.setsInfo(webapps.map((a) => a.name), disabled.map((a) => a.name)),
     };
@@ -1008,7 +1022,7 @@ export class TomcatService {
     disabledCopy: 'remove' | 'keep' = 'remove',
     keep: string[] = [],
     merged: MergedInput[] = [],
-    opts: { folder?: 'disable' } = {},
+    opts: { folder?: 'disable'; restart?: boolean } = {},
   ): Promise<string> {
     if (!this.watcher.get(file)) throw new TomcatError('That WAR is not in a watched folder (or is gone).', 404);
     const { webappsDir, disabledDir } = this.needFolders(false);
@@ -1033,6 +1047,7 @@ export class TomcatService {
     }
     let rewrite = null as RewriteResult | null;
     const write = kept.length ? async (tmp: string) => void (rewrite = await writeWarWithKept(file, tmp, kept)) : undefined;
+    const since = Date.now();
     const { replaced } = await deployWar(file, webappsDir, name, write);
     let removed = false;
     // The folder just moved there stays, as the copy that was replaced.
@@ -1057,8 +1072,102 @@ export class TomcatService {
       `Deployed ${basename(file)} as ${name}.war. Tomcat ${replaced ? 'redeploys' : 'deploys'} ${path} within a few seconds.` +
       moveNote +
       keptNote +
-      (removed ? ' The old disabled copy was removed.' : '')
+      (removed ? ' The old disabled copy was removed.' : '') +
+      this.restartAfterDeploy(name, webappsDir, since, opts.restart ?? this.cfg.tomcat.restartAfterDeploy)
     );
+  }
+
+  // ── Restart after a deploy ────────────────────────────
+
+  private deployRestartList(): DeployRestart[] {
+    const now = Date.now();
+    for (const [name, r] of this.deployRestarts) {
+      if (r.endedAt && now - Date.parse(r.endedAt) > DEPLOY_RESTART_SHOWN_MS) this.deployRestarts.delete(name);
+    }
+    return [...this.deployRestarts.values()].map((r) => ({ ...r })).sort((a, b) => b.startedAt.localeCompare(a.startedAt));
+  }
+
+  /**
+   * Starts the restart that follows a deploy, when asked for and possible, and returns the
+   * sentence the deploy's message ends with. A restart already waiting for this webapp is
+   * replaced: it was waiting for the WAR this deploy just replaced.
+   */
+  private restartAfterDeploy(name: string, webappsDir: string, since: number, wanted: boolean): string {
+    this.deployRestarts.delete(name);
+    if (!wanted) return '';
+    if (!this.cfg.tomcat.manager.url) return '';
+    if (isSelfWebapp(this.cfg, { name }) || this.isManagerApp(name)) return '';
+    const r: DeployRestart = { name, phase: 'waiting', startedAt: new Date().toISOString(), endedAt: null, message: null };
+    this.deployRestarts.set(name, r);
+    void this.deployRestartSteps(r, webappsDir, since);
+    return ' Debug Hub restarts it once Tomcat has deployed it.';
+  }
+
+  private async deployRestartSteps(r: DeployRestart, webappsDir: string, since: number): Promise<void> {
+    const { name } = r;
+    const path = contextPath(name);
+    const mgr = this.cfg.tomcat.manager;
+    const current = () => this.deployRestarts.get(name) === r;
+    const finish = (phase: DeployRestart['phase'], message: string, level: Level = 'info') => {
+      if (!current()) return;
+      Object.assign(r, { phase, message, endedAt: new Date().toISOString() });
+      this.note(level, message, { webapp: name, action: 'restart-after-deploy', outcome: phase });
+    };
+    const wait = this.opts.deployRestartWaitMs ?? DEPLOY_RESTART_WAIT_MS;
+    const poll = this.opts.deployRestartPollMs ?? DEPLOY_RESTART_POLL_MS;
+    const deadline = Date.now() + wait;
+    let app: ManagerApp | undefined;
+    let deployed = false;
+    let lastError: Error | null = null;
+    let reached = false;
+    try {
+      while (Date.now() < deadline) {
+        await sleep(poll);
+        if (!current()) return;
+        try {
+          app = (await managerList(mgr, this.opts.fetch)).find((m) => m.name === name);
+          reached = true;
+          lastError = null;
+        } catch (err) {
+          // Not running at all: Tomcat deploys the new WAR when it starts, nothing to restart.
+          if (!reached) return finish('skipped', `Did not restart ${path} after the deploy: ${(err as Error).message} Tomcat deploys the new WAR when it starts.`);
+          lastError = err as Error;
+          continue;
+        }
+        if (!app) continue;
+        // Tomcat unpacks a redeployed WAR afresh: a folder from after the deploy is the new build.
+        const dir = await stat(join(webappsDir, name)).catch(() => null);
+        if (dir?.isDirectory() ? dir.mtimeMs >= since - 1000 : Date.now() - since >= UNPACKED_GRACE_MS) {
+          deployed = true;
+          break;
+        }
+      }
+      if (!current()) return;
+      if (!app) {
+        const why = lastError ? lastError.message : `Tomcat had not deployed it after ${Math.round(wait / 1000)} s. Is autoDeploy on for this host?`;
+        return finish('failed', `Could not restart ${path} after the deploy: ${why}`, 'warn');
+      }
+      r.phase = 'restarting';
+      // Reload restarts it in place; it waits for a start still under way. A webapp that failed to
+      // start cannot be reloaded, so it is started instead.
+      let how: 'Reloaded' | 'Started';
+      try {
+        await managerCommand(mgr, 'reload', appParams(name), this.opts.fetch);
+        how = 'Reloaded';
+      } catch (err) {
+        if (!current()) return;
+        try {
+          await managerCommand(mgr, 'start', appParams(name), this.opts.fetch);
+          how = 'Started';
+        } catch (err2) {
+          return finish('failed', `Could not restart ${path} after the deploy: ${(err2 as Error).message} (reloading it said: ${(err as Error).message})`, 'warn');
+        }
+      }
+      if (!deployed) return finish('done', `${how} ${path} after the deploy, though Tomcat had not visibly redeployed the new WAR within ${Math.round(wait / 1000)} s.`, 'warn');
+      finish('done', `${how} ${path} after the deploy.`);
+    } catch (err) {
+      finish('failed', `Could not restart ${path} after the deploy: ${(err as Error).message}`, 'warn');
+    }
   }
 
   dismiss(file: string): void {

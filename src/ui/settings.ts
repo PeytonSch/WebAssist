@@ -1034,6 +1034,12 @@ function tomcatManagementFields(): HTMLElement[] {
     field('tomcat.manager.username', 'Manager user', textInput('tomcat.manager.username', { mono: true }), h('span', {}, 'A user with the ', h('code', {}, 'manager-script'), ' role in ', h('code', {}, 'conf/tomcat-users.xml'), '.')),
     field('tomcat.manager.password', 'Manager password', password, 'Stored in the settings file as plain text.'),
     field(
+      'tomcat.restartAfterDeploy',
+      'Restart after deploy',
+      toggle('tomcat.restartAfterDeploy', 'Restart webapps after a deploy'),
+      'Needs the Manager. After a deploy, waits until Tomcat has deployed the new WAR, then reloads the webapp (or starts it, if it did not start), for builds that do not come up right on their own. Each deploy can still opt out.',
+    ),
+    field(
       'tomcat.warWatch',
       'WAR build folders',
       listEditor('tomcat.warWatch', {

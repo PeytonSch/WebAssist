@@ -65,6 +65,11 @@ export interface Config {
      * when deploying.
      */
     preserveFiles: string[];
+    /**
+     * After a deploy, wait for Tomcat to deploy the new WAR, then restart the webapp through the
+     * Manager (reload, or start when it did not start). Needs the Manager.
+     */
+    restartAfterDeploy: boolean;
   };
   postgres: {
     enabled: boolean;
@@ -175,6 +180,7 @@ export const DEFAULT_CONFIG: Config = {
     startCommands: [],
     startChrome: false,
     preserveFiles: ['config.yaml', 'config.js', 'log4j2.xml'],
+    restartAfterDeploy: true,
   },
   postgres: { enabled: false, logs: [] },
   tail: { fromStart: false, pollMs: 200, flushMs: 150 },
@@ -428,6 +434,7 @@ export function validateConfig(input: unknown): { config: Config; errors: FieldE
   config.tomcat.home = optText('tomcat.home', config.tomcat.home, 'Tomcat folder');
   config.tomcat.javaHome = optText('tomcat.javaHome', config.tomcat.javaHome, 'Java folder');
   config.tomcat.startChrome = bool('tomcat.startChrome', config.tomcat.startChrome);
+  config.tomcat.restartAfterDeploy = bool('tomcat.restartAfterDeploy', config.tomcat.restartAfterDeploy);
   config.tomcat.preserveFiles = list('tomcat.preserveFiles', config.tomcat.preserveFiles, (n) =>
     /[\\/]/.test(n) ? 'A file name only, without a folder' : null,
   );

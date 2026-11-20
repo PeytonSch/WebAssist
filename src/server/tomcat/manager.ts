@@ -25,8 +25,10 @@ export interface ManagerApp {
 export type Fetch = typeof fetch;
 
 const TIMEOUT_MS = 5000;
+/** Start, stop and reload answer once the webapp has, which for a large one takes a while. */
+const ACTION_TIMEOUT_MS = 120_000;
 
-function describeNetworkError(err: any, url: string): string {
+function describeNetworkError(err: any, url: string, timeoutMs: number): string {
   const code = err?.cause?.code ?? err?.code;
   let where = url;
   try {
@@ -35,7 +37,7 @@ function describeNetworkError(err: any, url: string): string {
     /* shown as typed */
   }
   if (code === 'ECONNREFUSED') return `Tomcat is not running: nothing answers at ${where}.`;
-  if (err?.name === 'TimeoutError' || err?.name === 'AbortError') return `The Tomcat Manager at ${where} did not answer within ${TIMEOUT_MS / 1000} s.`;
+  if (err?.name === 'TimeoutError' || err?.name === 'AbortError') return `The Tomcat Manager at ${where} did not answer within ${timeoutMs / 1000} s.`;
   if (code === 'ENOTFOUND') return `Unknown host in the Manager URL: ${where}.`;
   return `Could not reach the Tomcat Manager at ${where}: ${err?.cause?.message ?? err?.message ?? err}`;
 }
@@ -48,6 +50,7 @@ export async function managerCommand(
   fetchImpl: Fetch = fetch,
 ): Promise<string> {
   if (!mgr.url) throw new TomcatError('The Tomcat Manager is not set up. Add its URL in Settings › Tomcat.');
+  const timeoutMs = command === 'list' ? TIMEOUT_MS : ACTION_TIMEOUT_MS;
   const url = new URL(`${mgr.url.replace(/\/+$/, '')}/${command}`);
   for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
   const headers: Record<string, string> = {};
@@ -56,9 +59,9 @@ export async function managerCommand(
   }
   let res: Response;
   try {
-    res = await fetchImpl(url, { headers, signal: AbortSignal.timeout(TIMEOUT_MS), redirect: 'manual' });
+    res = await fetchImpl(url, { headers, signal: AbortSignal.timeout(timeoutMs), redirect: 'manual' });
   } catch (err) {
-    throw new TomcatError(describeNetworkError(err, mgr.url), 502);
+    throw new TomcatError(describeNetworkError(err, mgr.url, timeoutMs), 502);
   }
   const body = await res.text().catch(() => '');
   if (res.status === 401) {

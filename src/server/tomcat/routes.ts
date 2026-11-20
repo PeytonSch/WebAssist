@@ -45,7 +45,7 @@ const strings = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is
  *   GET  /api/tomcat/console?id=&from=       output of a console source (start, stop, cmd:<run id>) since byte from
  *   POST /api/tomcat/commands/<i>/run        { command } run start command i on its own
  *   POST /api/tomcat/runs/<id>/stop          stop a start command's run and what it started
- *   POST /api/tomcat/deploy                  { file, name, disabledCopy: "remove" | "keep", folder?: "disable", keep?: [relative paths],
+ *   POST /api/tomcat/deploy                  { file, name, disabledCopy: "remove" | "keep", folder?: "disable", restart?: boolean, keep?: [relative paths],
  *                                              merged?: [{ path, text, deployedHash?, buildHash? }] }
  *   GET  /api/tomcat/keep?name=&file=        files a deploy could keep from the copy it replaces
  *   GET  /api/tomcat/keep/compare?name=&file=  the same, each compared with the new WAR's file (new settings…)
@@ -116,7 +116,8 @@ export async function tomcatRoute(
       const b = await body(DEPLOY_BODY_LIMIT);
       const disabledCopy = b.disabledCopy === 'keep' ? 'keep' : 'remove';
       const folder = b.folder === 'disable' ? 'disable' : undefined;
-      const message = await tomcat.deploy(String(b.file ?? ''), String(b.name ?? '').trim(), disabledCopy, strings(b.keep), mergedInputs(b.merged), { folder });
+      const restart = typeof b.restart === 'boolean' ? b.restart : undefined;
+      const message = await tomcat.deploy(String(b.file ?? ''), String(b.name ?? '').trim(), disabledCopy, strings(b.keep), mergedInputs(b.merged), { folder, restart });
       return json(res, 200, { message }), true;
     }
     if (path === '/api/tomcat/delete') {

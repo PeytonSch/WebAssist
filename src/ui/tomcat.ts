@@ -141,7 +141,7 @@ function schedule(): void {
   // Faster while something is under way; a Tomcat running in the foreground is not that (its output is in the console).
   const start = T.state?.scripts.start;
   const starting = !!start?.running && (!start.foreground || Date.now() - Date.parse(start.startedAt) < 60_000);
-  const running = !!(starting || T.state?.scripts.stop?.running || T.state?.sequence?.running || T.state?.restart?.running || T.state?.sets.applying);
+  const running = !!(starting || T.state?.scripts.stop?.running || T.state?.sequence?.running || T.state?.restart?.running || T.state?.sets.applying || T.state?.deployRestarts?.some((r) => !r.endedAt));
   T.timer = window.setTimeout(async () => {
     if (!document.hidden) await refresh();
     schedule();
@@ -653,8 +653,27 @@ function isManagerApp(s: TomcatState, app: WebappInfo): boolean {
   }
 }
 
+/** Shown after it has ended, so a deploy's restart can be checked on when looking back. */
+const DEPLOY_RESTART_TAG_MS = { done: 2 * 60_000, skipped: 2 * 60_000, failed: 10 * 60_000 };
+
+/** The restart after the latest deploy: a spinner while it runs, a tag for a while after. */
+function deployRestartBits(s: TomcatState, app: WebappInfo): { note: HTMLElement | null; tag: HTMLElement | null } {
+  const r = app.state === 'disabled' ? undefined : s.deployRestarts?.find((d) => d.name === app.name);
+  if (!r) return { note: null, tag: null };
+  if (!r.endedAt) {
+    const doing = r.phase === 'waiting' ? 'Waiting for Tomcat to deploy it…' : 'Restarting after deploy…';
+    const title = r.phase === 'waiting' ? 'Once Tomcat has deployed the new WAR, Debug Hub restarts it' : undefined;
+    return { note: h('span', { class: 'tm-busy', role: 'status', title }, h('span', { class: 'spinner', 'aria-hidden': 'true' }), doing), tag: null };
+  }
+  const phase = r.phase as keyof typeof DEPLOY_RESTART_TAG_MS;
+  if (Date.now() - Date.parse(r.endedAt) > (DEPLOY_RESTART_TAG_MS[phase] ?? 0)) return { note: null, tag: null };
+  const label = { done: 'restarted', failed: 'restart failed', skipped: 'not restarted' }[phase];
+  return { note: null, tag: h('span', { class: `tm-tag deploy-restart ${phase}`, title: `${r.message ?? ''} (${time(r.endedAt)})` }, label) };
+}
+
 function webappRow(s: TomcatState, app: WebappInfo): HTMLElement {
   const busy = T.busy.has(`app:${app.name}`);
+  const restart = deployRestartBits(s, app);
   const mgr = s.manager;
   const actions: HTMLElement[] = [];
   // Debug Hub's own webapp (when it runs inside this Tomcat) is guarded like the Manager's.
@@ -698,11 +717,11 @@ function webappRow(s: TomcatState, app: WebappInfo): HTMLElement {
   const row = h(
     'div',
     { class: `tm-row${busy ? ' busy' : ''}` },
-    h('div', { class: 'tm-name' }, h('b', {}, app.name), ...kinds.map((k) => h('span', { class: 'tm-tag' }, k)), self ? h('span', { class: 'tm-tag self', title: SELF_WHY }, 'Debug Hub') : null),
+    h('div', { class: 'tm-name' }, h('b', {}, app.name), ...kinds.map((k) => h('span', { class: 'tm-tag' }, k)), self ? h('span', { class: 'tm-tag self', title: SELF_WHY }, 'Debug Hub') : null, restart.tag),
     path,
     h('div', {}, stateBadge(app.state), app.sessions ? h('span', { class: 'muted tm-sessions' }, `${app.sessions} session${app.sessions === 1 ? '' : 's'}`) : null),
     // While an action runs, the spinner takes the place beside the buttons.
-    busyNote(`app:${app.name}`) ?? h('span', { class: 'muted', title: app.modified ? new Date(app.modified).toLocaleString() : '' }, [ago(app.modified), fmtBytes(app.bytes)].filter(Boolean).join(' · ')),
+    busyNote(`app:${app.name}`) ?? restart.note ?? h('span', { class: 'muted', title: app.modified ? new Date(app.modified).toLocaleString() : '' }, [ago(app.modified), fmtBytes(app.bytes)].filter(Boolean).join(' · ')),
     h('div', { class: 'tm-actions' }, ...actions),
   );
   return searchable(row, app.name, app.path, STATE_LABEL[app.state], ...kinds, self && 'Debug Hub');
@@ -934,6 +953,9 @@ async function openDeploy(war: WarInfo): Promise<void> {
   input.value = war.target;
   const removeOld = h('input', { type: 'checkbox' }) as HTMLInputElement;
   removeOld.checked = true;
+  const restart = h('input', { type: 'checkbox' }) as HTMLInputElement;
+  restart.checked = state?.settings.restartAfterDeploy ?? true;
+  const restartRow = h('label', { class: 'check tm-check tm-deploy-restart', title: 'Waits until Tomcat has deployed the new WAR, then reloads the webapp through the Manager (or starts it, if it did not start)' }, restart, ' Restart it once Tomcat has deployed it');
   // What can be kept, for the name it was loaded for; reloaded as the name is edited.
   const keep = new KeepFiles({ api, war, changed: () => update() });
   let keepTimer = 0;
@@ -955,6 +977,9 @@ async function openDeploy(war: WarInfo): Promise<void> {
   const ok = h('button', { type: 'submit', class: 'btn btn-primary' }, 'Deploy') as HTMLButtonElement;
   const cancel = h('button', { type: 'button', class: 'btn' }, 'Cancel');
 
+  /** Restarting needs the Manager, and is never done to the Manager or Debug Hub itself. */
+  const canRestart = (name: string) =>
+    !!state?.manager.configured && !state.webapps.some((a) => a.name === name && (a.self || isManagerApp(state!, a)));
   /** Deployed as a folder only: Tomcat would serve it in place of the new WAR unless it is moved aside. */
   const folderOnly = (name: string) => !!state?.webapps.find((a) => a.name === name && !a.external && a.hasDir && !a.hasWar);
   const update = () => {
@@ -1002,6 +1027,7 @@ async function openDeploy(war: WarInfo): Promise<void> {
       }
     }
     note.replaceChildren(...parts.filter((p): p is Node => !!p));
+    restartRow.hidden = blocked || !canRestart(name);
     keep.show(!blocked && keep.name === name);
     ok.disabled = blocked;
   };
@@ -1023,6 +1049,7 @@ async function openDeploy(war: WarInfo): Promise<void> {
     h('label', { class: 'tm-deploy-label', for: 'tm-deploy-name' }, 'Deploy as'),
     input,
     note,
+    restartRow,
     keep.el,
     error,
     h('div', { class: 'dialog-actions' }, cancel, ok),
@@ -1052,7 +1079,7 @@ async function openDeploy(war: WarInfo): Promise<void> {
       }
       const tooLarge = keep.tooLarge();
       if (tooLarge) throw new Error(tooLarge);
-      const body = { file: war.file, name, disabledCopy: removeOld.checked ? 'remove' : 'keep', ...(folderOnly(name) ? { folder: 'disable' } : {}), ...keep.choices() };
+      const body = { file: war.file, name, disabledCopy: removeOld.checked ? 'remove' : 'keep', ...(folderOnly(name) ? { folder: 'disable' } : {}), restart: !restartRow.hidden && restart.checked, ...keep.choices() };
       const { message } = await api('/api/tomcat/deploy', body);
       T.banner = { kind: 'info', text: message };
       dropNotice(war.file);

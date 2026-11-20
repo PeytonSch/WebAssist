@@ -459,6 +459,15 @@ Hub. Set it up under Settings → Tomcat server; the page says what is missing.
   moved to the disabled folder as part of the same Deploy, stopped first if it is running and
   replacing an older disabled copy there; the dialog says so, and its local config files can
   still be kept. **Show in Explorer** (Finder on macOS, the folder elsewhere) opens where a WAR was built.
+- **Restart after deploy.** With the Manager set up, a deploy is followed by a restart, for
+  builds that do not come up right on their own: Debug Hub asks the Manager every 2 seconds
+  until Tomcat has deployed the new WAR (the webapp is listed and its unpacked folder is newer
+  than the deploy), then reloads it, or starts it if it did not start. The webapp's row shows
+  *Waiting for Tomcat to deploy it…*, then a *restarted* tag (or *restart failed*, with why on
+  hover), and the outcome goes on the timeline. If Tomcat has not redeployed it within 2
+  minutes it is reloaded anyway, and if Tomcat is not running nothing is done: it deploys the
+  WAR when it starts. Turn it off with `tomcat.restartAfterDeploy`, or untick **Restart it once
+  Tomcat has deployed it** for one deploy. The Manager and Debug Hub itself are never restarted.
 - **Keeping local files.** If the copy being replaced (its unpacked folder, else its WAR, else
   its disabled copy) has files named in `tomcat.preserveFiles` anywhere in it (not under
   `WEB-INF/lib` or `node_modules`), the deploy dialog lists them under **Local config files**,
@@ -681,6 +690,7 @@ written with forward slashes or pasted as they are (`C:\Users\me\logs`).
 | `tomcat.startChrome` | `false` | Start Tomcat also starts Chrome with its debugging port, last. |
 | `tomcat.manager` | | Optional Tomcat Manager login: `{ "url": "http://localhost:8080/manager/text", "username": …, "password": … }`. The password is stored as plain text. |
 | `tomcat.warWatch` | `[]` | Folders where WARs are built; `*` matches any folder name, e.g. `C:/dev/*/target`. |
+| `tomcat.restartAfterDeploy` | `true` | After a deploy, wait for Tomcat to deploy the new WAR, then reload the webapp through the Manager (or start it). Needs `tomcat.manager`. |
 | `tomcat.preserveFiles` | `["config.yaml", "config.js", "log4j2.xml"]` | File names (`*` allowed) a deploy can keep from the deployed copy, or merge with the new build's, instead of taking the new build's. |
 | `postgres.enabled`, `postgres.logs` | `false`, `[]` | Postgres server logs. |
 | `tail.fromStart` | `false` | Read existing log content at startup, not only new lines. |

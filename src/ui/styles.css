@@ -3091,3 +3091,8 @@ dialog.tm-deploy:has(.kf-list) { width: 680px; max-width: calc(100vw - 32px); }
   .tm-row.tm-set > :nth-child(3) { display: none; }
   .tm-row.tm-set > :nth-child(4) { display: flex; }
 }
+
+/* Restart after a deploy, on the webapp's row */
+.tm-tag.deploy-restart.done { color: var(--ok); border-color: currentColor; cursor: help; }
+.tm-tag.deploy-restart.failed { color: var(--error); border-color: currentColor; background: var(--error-soft); cursor: help; }
+.tm-tag.deploy-restart.skipped { cursor: help; }
